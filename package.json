@@ -2,25 +2,58 @@
   "name": "inventario-barra",
   "version": "0.1.0",
   "private": true,
+  "main": "main.js",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "electron:dev": "concurrently \"npm run dev\" \"electron .\"",
+    "electron:build": "next build --webpack && electron-builder"
   },
   "dependencies": {
     "next": "16.3.1",
+    "next-pwa": "^5.6.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "react-select": "^5.10.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@prisma/client": "^6.19.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^8.2.2",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
+    "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.altezza.barinventory",
+    "productName": "Altezza Bar Inventory",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      ".next/**/*",
+      "public/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "prisma/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    }
   }
 }

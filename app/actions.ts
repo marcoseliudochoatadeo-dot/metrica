@@ -1,0 +1,876 @@
+'use server';
+
+import { prisma } from '@/lib/prisma';
+import { revalidatePath } from 'next/cache';
+import * as XLSX from 'xlsx';
+
+// ==========================================
+// INVENTARIO Y BÁSCULA 
+// ==========================================
+
+export async function updateInventoryWeight(
+  productId: string,
+  measurementMethod: string,
+  openValues: number[],
+  newClosedUnits: number
+) {
+  try {
+    if (!productId) {
+      return { success: false, error: 'ID de producto no válido' };
+    }
+
+    const currentProduct = await prisma.product.findUnique({
+      where: { id: productId },
+      include: { openBottles: true },
+    });
+
+    if (!currentProduct) {
+      return { success: false, error: 'Producto no encontrado' };
+    }
+
+    const newWeight = openValues.reduce((acc, val) => acc + (Number(val) || 0), 0);
+    const previousWeight = currentProduct.currentWeight || 0;
+    const previousClosed = currentProduct.stockClosed || 0;
+
+    const isInitialLoad = previousWeight === 0 && previousClosed === 0 && newWeight === 0 && newClosedUnits === 0;
+
+    const weightDiff = isInitialLoad ? 0 : newWeight - previousWeight;
+    const closedDiff = isInitialLoad ? 0 : newClosedUnits - previousClosed;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: productId },
+        data: {
+          measurementMethod,
+          currentWeight: newWeight,
+          stockClosed: newClosedUnits,
+        },
+      });
+
+      await tx.openBottle.deleteMany({
+        where: { productId },
+      });
+
+      if (openValues.length > 0) {
+        await tx.openBottle.createMany({
+          data: openValues.map((val) => ({
+            productId,
+            value: Number(val) || 0,
+          })),
+        });
+      }
+
+      if (!isInitialLoad && (weightDiff !== 0 || closedDiff !== 0)) {
+        await tx.inventoryLog.create({
+          data: {
+            productId,
+            previousWeight,
+            newWeight,
+            weightDiff,
+            previousClosed,
+            newClosed: newClosedUnits,
+            closedDiff,
+          },
+        });
+      }
+
+      return await tx.product.findUnique({
+        where: { id: productId },
+        include: { openBottles: true },
+      });
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    revalidatePath('/sales');
+    revalidatePath('/');
+
+    return { success: true, data: JSON.parse(JSON.stringify(updated)) };
+  } catch (error: any) {
+    console.error('Error al actualizar peso de inventario:', error);
+    return {
+      success: false,
+      error: error.message || 'Error al actualizar en la base de datos',
+    };
+  }
+}
+
+export async function getProducts() {
+  try {
+    const products = await prisma.product.findMany({
+      include: {
+        openBottles: true,
+      },
+      orderBy: { 
+        name: 'asc' 
+      },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(products)) };
+  } catch (error) {
+    console.error('Error al obtener productos:', error);
+    return { success: false, data: [] };
+  }
+}
+
+// ==========================================
+// GESTIÓN DE INSUMOS (PRODUCTS)
+// ==========================================
+
+export async function createProduct(data: any) {
+  try {
+    const cleanName = String(data.name).trim();
+
+    // CANDADO 1: Obtenemos los nombres actuales para verificar duplicados
+    const existingProducts = await prisma.product.findMany({
+      select: { name: true }
+    });
+    
+    // Comprobamos si el nombre ya existe (ignorando mayúsculas/minúsculas)
+    const alreadyExists = existingProducts.some(
+      (p) => p.name.toLowerCase() === cleanName.toLowerCase()
+    );
+
+    if (alreadyExists) {
+      return { success: false, error: `Ya existe un producto registrado con el nombre "${cleanName}".` };
+    }
+
+    const newProduct = await prisma.product.create({
+      data: {
+        name: cleanName,
+        category: data.category || 'Otros',
+        subtype: data.subtype || '', 
+        capacity: parseFloat(data.capacity) || 0,
+        unit: data.unit || 'g',
+        tareWeight: parseFloat(data.tareWeight) || 0,
+        currentWeight: 0,
+        stockClosed: 0,
+        costPrice: parseFloat(data.costPrice) || 0,
+        salePrice: parseFloat(data.salePrice) || 0,
+        glassPrice: parseFloat(data.glassPrice) || 0,
+        minStock: parseFloat(data.minStock) || 1, // <-- AGREGADO
+        maxStock: parseFloat(data.maxStock) || 10, // <-- AGREGADO
+        supplier: data.supplier || '',
+        measurementMethod: data.measurementMethod || 'SCALE',
+      },
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    return { success: true, data: JSON.parse(JSON.stringify(newProduct)) };
+  } catch (error: any) {
+    console.error('Error al crear producto:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function updateProduct(id: string, data: any) {
+  try {
+    const updatedProduct = await prisma.product.update({
+      where: { id },
+      data: {
+        name: data.name,
+        category: data.category,
+        subtype: data.subtype || '', 
+        capacity: parseFloat(data.capacity) || 0,
+        unit: data.unit || 'g',
+        tareWeight: parseFloat(data.tareWeight) || 0,
+        costPrice: parseFloat(data.costPrice) || 0,
+        salePrice: parseFloat(data.salePrice) || 0,
+        glassPrice: parseFloat(data.glassPrice) || 0,
+        minStock: parseFloat(data.minStock) || 1, // <-- AGREGADO
+        maxStock: parseFloat(data.maxStock) || 10, // <-- AGREGADO
+        supplier: data.supplier || '',
+        measurementMethod: data.measurementMethod || 'SCALE',
+      },
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    return { success: true, data: JSON.parse(JSON.stringify(updatedProduct)) };
+  } catch (error: any) {
+    console.error('Error al actualizar producto:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function deleteProduct(id: string) {
+  try {
+    await prisma.product.delete({
+      where: { id },
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error al eliminar producto:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getInventoryLogs() {
+  try {
+    const logs = await prisma.inventoryLog.findMany({
+      include: {
+        product: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(logs)) };
+  } catch (error: any) {
+    console.error('Error al obtener historial de inventario:', error);
+    return { success: false, data: [] };
+  }
+}
+
+// ==========================================
+// GESTIÓN DE VENTAS Y DESCUENTO DE INVENTARIO
+// ==========================================
+
+async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: number) {
+  const catLower = (product.category || '').toLowerCase();
+  
+  const isLiquorOrWine = [
+    'destilado', 'destilados', 'licor', 'licores', 'vinos', 'vino', 'tinto', 'blanco', 
+    'rosado', 'espumoso', 'champagne', 'cava', 'tequila', 'mezcal', 'ron', 'gin', 
+    'ginebra', 'whisky', 'vodka', 'brandy', 'cognac'
+  ].some((c) => catLower.includes(c));
+
+  if (isLiquorOrWine && Number(product.capacity || 0) > 0) {
+    const pCap = Number(product.capacity || 750);
+    const tare = Number(product.tareWeight || 0);
+    const method = product.measurementMethod || 'SCALE';
+    let stockClosed = Number(product.stockClosed || 0);
+    let currentWeight = Number(product.currentWeight || 0);
+
+    let netOpenMl = 0;
+
+    // 1. OBTENER MILILITROS REALES SEGÚN EL MÉTODO DE MEDICIÓN
+    if (method === 'PORTION') {
+      netOpenMl = currentWeight * pCap;
+    } else {
+      if (currentWeight > tare) {
+        netOpenMl = currentWeight - tare;
+      }
+    }
+
+    // 2. CALCULAR GLOBAL Y RESTAR (¡Quitamos el Math.max(0, ...) para permitir negativos reales!)
+    let totalMlGlobal = (stockClosed * pCap) + netOpenMl;
+    totalMlGlobal = totalMlGlobal - totalDeductionMl;
+
+    // 3. REDISTRIBUIR (Soportando saldos negativos de manera limpia)
+    let newClosedUnits = 0;
+    let remainderMl = 0;
+
+    if (totalMlGlobal >= 0) {
+      newClosedUnits = Math.floor(totalMlGlobal / pCap);
+      remainderMl = totalMlGlobal % pCap;
+    } else {
+      // Si el global es negativo (ej. -7 ml), las unidades cerradas quedan en 0 
+      // y el residuo abierto absorbe todo el déficit en negativo.
+      newClosedUnits = 0;
+      remainderMl = totalMlGlobal; 
+    }
+
+    // 4. VOLVER A GUARDAR SEGÚN EL FORMATO DEL MÉTODO
+    let newCurrentWeight = 0;
+    if (method === 'PORTION') {
+      // Si es por porción, guardamos la proporción (ej. -7 / 750)
+      newCurrentWeight = pCap > 0 ? remainderMl / pCap : 0;
+    } else {
+      // Si es por báscula, guardamos el peso en negativo o ajustado con la tara
+      if (remainderMl < 0) {
+        // En negativo puro manteniendo la referencia de la tara para que al rellenar cuadre
+        newCurrentWeight = tare + remainderMl; 
+      } else {
+        newCurrentWeight = remainderMl > 0 ? remainderMl + tare : (newClosedUnits > 0 ? tare : 0);
+      }
+    }
+
+    await tx.product.update({
+      where: { id: product.id },
+      data: {
+        stockClosed: Math.max(0, newClosedUnits),
+        currentWeight: newCurrentWeight, // Permite valores donde currentWeight < tare para reflejar el faltante negativo
+      },
+    });
+
+    // Limpiar el desglose temporal de "openBottles" para forzar la lectura del nuevo peso consolidado
+    await tx.openBottle.deleteMany({
+      where: { productId: product.id }
+    });
+
+  } else {
+    // Lógica para frutas, abarrotes y preparaciones
+    let currentStockClosed = Number(product.stockClosed || 0);
+    let currentWeight = Number(product.currentWeight || 0);
+
+    const isStrictPiece = [
+      'refresco', 'agua', 'coca', 'cafe', 'cápsula', 'capsula', 'lata', 'cerveza', 'jugo', 'mix', 'bebidas'
+    ].some((term) => catLower.includes(term) || (product.name || '').toLowerCase().includes(term));
+
+    if (isStrictPiece) {
+      currentStockClosed = currentStockClosed - totalDeductionMl; // Permite negativos si es necesario
+    } else {
+      currentWeight = currentWeight - totalDeductionMl;
+    }
+
+    await tx.product.update({
+      where: { id: product.id },
+      data: {
+        stockClosed: currentStockClosed,
+        currentWeight: currentWeight,
+      },
+    });
+
+    await tx.openBottle.deleteMany({
+      where: { productId: product.id }
+    });
+  }
+}
+
+export async function createSale(
+  type: 'RECIPE' | 'PRODUCT',
+  itemId: string,
+  quantitySold: number = 1,
+  saleMode: string = 'RECETA',
+  deductionMl: number = 0,
+  explicitSalePrice: number = 0
+) {
+  try {
+    if (!itemId) {
+      return { success: false, error: 'ID no válido' };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (type === 'RECIPE') {
+        const recipe = await tx.recipe.findUnique({
+          where: { id: itemId },
+          include: { items: { include: { product: true } } },
+        });
+
+        if (!recipe) throw new Error('Receta no encontrada');
+
+        const unitCost = recipe.items.reduce((acc: number, item: any) => {
+          if (!item.product) return acc;
+          const pCost = Number(item.product.costPrice || 0);
+          const pCap = Number(item.product.capacity || 1);
+          const pUnit = (item.product.unit || 'ml').toLowerCase();
+          const ingQty = Number(item.quantity || 0);
+
+          let costPerItemUnit = 0;
+
+          if (pUnit === 'kg' || pUnit === 'kilo') {
+            costPerItemUnit = (pCost / 1000) * ingQty;
+          } else if (pUnit === 'lt' || pUnit === 'lts' || pUnit === 'litros') {
+            costPerItemUnit = (pCost / 1000) * ingQty;
+          } else if (pCap > 1) {
+            costPerItemUnit = (pCost / pCap) * ingQty;
+          } else {
+            costPerItemUnit = pCost * ingQty;
+          }
+
+          return acc + costPerItemUnit;
+        }, 0);
+
+        const totalCost = unitCost * quantitySold;
+        const finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (recipe.price || 0) * quantitySold;
+
+        await tx.sale.create({
+          data: {
+            recipeId: itemId,
+            quantity: quantitySold,
+            saleMode: 'RECETA',
+            status: 'PENDING',
+            price: finalPrice,
+            cost: totalCost,
+          },
+        });
+
+        for (const recipeItem of recipe.items) {
+          if (!recipeItem.product) continue;
+          const totalDeductionMl = (recipeItem.quantity || 0) * quantitySold;
+          await applyInventoryDeduction(tx, recipeItem.product, totalDeductionMl);
+        }
+
+      } else if (type === 'PRODUCT') {
+        const product = await tx.product.findUnique({
+          where: { id: itemId },
+        });
+
+        if (!product) throw new Error('Producto no encontrado');
+
+        const pCost = Number(product.costPrice || 0);
+        const pCap = Number(product.capacity || 750);
+        let unitCost = 0;
+        let totalMlToDeduce = 0;
+        let modeToSave = saleMode;
+        let finalPrice = 0;
+
+        const catLower = (product.category || '').toLowerCase();
+        const nameLower = (product.name || '').toLowerCase();
+        const isStrictPiece = [
+          'refresco', 'agua', 'coca', 'cafe', 'cápsula', 'capsula', 'lata', 'cerveza', 'jugo', 'mix', 'bebidas'
+        ].some((term) => catLower.includes(term) || nameLower.includes(term));
+
+        if (isStrictPiece) {
+          unitCost = pCost * quantitySold;
+          totalMlToDeduce = quantitySold;
+          modeToSave = 'PIEZA';
+          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (Number(product.salePrice || 0) * quantitySold);
+
+          await tx.sale.create({
+            data: {
+              productId: itemId,
+              quantity: quantitySold, 
+              saleMode: modeToSave,
+              status: 'PENDING',
+              price: finalPrice,
+              cost: unitCost,
+            },
+          });
+
+          const currentStock = Number(product.stockClosed || 0);
+          await tx.product.update({
+            where: { id: product.id },
+            data: { stockClosed: Math.max(0, currentStock - quantitySold) },
+          });
+
+        } else if (saleMode === 'BOTELLA') {
+          unitCost = pCost * quantitySold;
+          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (Number(product.salePrice || 0) * quantitySold);
+
+          await tx.sale.create({
+            data: {
+              productId: itemId,
+              quantity: quantitySold, 
+              saleMode: 'BOTELLA',
+              status: 'PENDING',
+              price: finalPrice,
+              cost: unitCost,
+            },
+          });
+
+          const currentClosed = Number(product.stockClosed || 0);
+          await tx.product.update({
+            where: { id: product.id },
+            data: { stockClosed: Math.max(0, currentClosed - quantitySold) },
+          });
+
+        } else {
+          // VENTA POR COPEO
+          const isWineOrEspumoso = [
+            'vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'
+          ].some((c) => catLower.includes(c));
+
+          const defaultMl = isWineOrEspumoso ? 150 : 45;
+          const portions = quantitySold > 0 ? quantitySold : 1;
+          totalMlToDeduce = defaultMl * portions;
+
+          const costPerMl = pCap > 0 ? pCost / pCap : 0;
+          unitCost = costPerMl * totalMlToDeduce;
+
+          // Tomamos el glassPrice fijo por copa y lo multiplicamos estrictamente por el número de tragos (portions)
+          const glassPrice = Number(product.glassPrice || 0);
+          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (glassPrice * portions);
+
+          await tx.sale.create({
+            data: {
+              productId: itemId,
+              quantity: portions, // Guardamos el número de tragos (ej. 1, 2)
+              saleMode: 'COPEO',
+              status: 'PENDING',
+              price: finalPrice, // Precio exacto: 1 * 180 = 180
+              cost: unitCost,
+            },
+          });
+
+          await applyInventoryDeduction(tx, product, totalMlToDeduce);
+        }
+      }
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/sales');
+    revalidatePath('/');
+
+    return { success: true, message: 'Venta registrada y stock descontado con éxito.' };
+  } catch (error: any) {
+    console.error('Error al procesar la venta:', error);
+    return { success: false, error: error.message || 'Error al registrar la venta.' };
+  }
+}
+
+export async function getPendingSales() {
+  try {
+    const sales = await prisma.sale.findMany({
+      where: { status: 'PENDING' },
+      include: {
+        recipe: {
+          include: { items: { include: { product: true } } },
+        },
+        product: true,
+      },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(sales)) };
+  } catch (error: any) {
+    console.error('Error al obtener ventas pendientes:', error);
+    return { success: false, data: [] };
+  }
+}
+
+export async function auditAndCloseShift() {
+  try {
+    await prisma.sale.updateMany({
+      where: { status: 'PENDING' },
+      data: { status: 'AUDITED' },
+    });
+
+    revalidatePath('/mermas');
+    revalidatePath('/sales');
+    revalidatePath('/');
+
+    return { success: true, message: 'Turno cerrado y auditoría reseteada correctamente.' };
+  } catch (error: any) {
+    console.error('Error al cerrar turno:', error);
+    return { success: false, error: error.message || 'Error al cerrar el turno.' };
+  }
+}
+
+export async function importProductsFromExcel(formData: FormData) {
+  try {
+    const file = formData.get('file') as File;
+    if (!file) {
+      return { success: false, error: 'No se ha proporcionado ningún archivo.' };
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    
+    const rows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+    if (rows.length === 0) {
+      return { success: false, error: 'El archivo Excel está vacío o no tiene el formato correcto.' };
+    }
+
+    // CANDADO 2: Cargamos nombres existentes de la Base de Datos
+    const existingProductsDb = await prisma.product.findMany({
+      select: { name: true }
+    });
+    // Creamos un registro rápido de nombres en minúsculas para comparar
+    const existingNames = new Set(existingProductsDb.map(p => p.name.toLowerCase().trim()));
+
+    let importedCount = 0;
+    let skippedCount = 0;
+
+    for (const row of rows) {
+      const rawName = row['Nombre'] || row['nombre'] || row['PRODUCTO'] || row['Name'];
+      if (!rawName) continue;
+
+      const cleanName = String(rawName).trim();
+
+      // Si el producto ya existe, saltamos a la siguiente fila para no duplicar
+      if (existingNames.has(cleanName.toLowerCase())) {
+        skippedCount++;
+        continue;
+      }
+
+      const category = row['Categoria'] || row['Categoría'] || row['CATEGORIA'] || 'Abarrotes';
+      const subtype = row['Subtipo'] || row['SUBTIPO'] || row['subtype'] || '';
+      const supplier = row['Proveedor'] || row['PROVEEDOR'] || row['Supplier'] || '';
+      const capacity = parseFloat(row['Capacidad'] || row['CAPACIDAD'] || row['capacity'] || 1000);
+      const costPrice = parseFloat(row['Costo'] || row['COSTO'] || row['costPrice'] || 0);
+      const unit = row['Unidad'] || row['UNIDAD'] || row['unit'] || 'ml';
+      const tareWeight = parseFloat(row['Tara'] || row['TARA'] || row['tareWeight'] || 0);
+
+      await prisma.product.create({
+        data: {
+          name: cleanName,
+          category: String(category).trim(),
+          subtype: String(subtype).trim(),
+          supplier: String(supplier).trim(),
+          capacity: isNaN(capacity) ? 1000 : capacity,
+          costPrice: isNaN(costPrice) ? 0 : costPrice,
+          unit: String(unit).trim(),
+          tareWeight: isNaN(tareWeight) ? 0 : tareWeight,
+          currentWeight: 0,
+          stockClosed: 0,
+          measurementMethod: 'SCALE',
+        },
+      });
+      
+      // Añadimos el recién creado al registro para que no se duplique si viene 2 veces en el mismo Excel
+      existingNames.add(cleanName.toLowerCase());
+      importedCount++;
+    }
+
+    return { 
+      success: true, 
+      count: importedCount, 
+      message: `Se importaron ${importedCount} productos nuevos. Se omitieron ${skippedCount} duplicados.` 
+    };
+  } catch (error: any) {
+    console.error('Error al importar Excel:', error);
+    return { success: false, error: error.message || 'Error al procesar el archivo.' };
+  }
+}
+
+export async function updateAllInventoryWeights(items: { productId: string; measurementMethod: string; openValues: number[]; newClosedUnits: number }[]) {
+  try {
+    for (const item of items) {
+      if (!item.productId) continue;
+
+      const currentProduct = await prisma.product.findUnique({
+        where: { id: item.productId },
+        include: { openBottles: true },
+      });
+
+      if (!currentProduct) continue;
+
+      const newWeight = item.openValues.reduce((acc, val) => acc + (Number(val) || 0), 0);
+      const previousWeight = currentProduct.currentWeight || 0;
+      const previousClosed = currentProduct.stockClosed || 0;
+
+      const isInitialLoad = previousWeight === 0 && previousClosed === 0 && newWeight === 0 && item.newClosedUnits === 0;
+
+      const weightDiff = isInitialLoad ? 0 : newWeight - previousWeight;
+      const closedDiff = isInitialLoad ? 0 : item.newClosedUnits - previousClosed;
+
+      await prisma.$transaction(async (tx) => {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            measurementMethod: item.measurementMethod,
+            currentWeight: newWeight,
+            stockClosed: item.newClosedUnits,
+            lastCountMap: (item as any).lastCountMap || null,
+          },
+        });
+
+        await tx.openBottle.deleteMany({
+          where: { productId: item.productId },
+        });
+
+        if (item.openValues.length > 0) {
+          await tx.openBottle.createMany({
+            data: item.openValues.map((val) => ({
+              productId: item.productId,
+              value: Number(val) || 0,
+            })),
+          });
+        }
+
+        if (!isInitialLoad && (weightDiff !== 0 || closedDiff !== 0)) {
+          await tx.inventoryLog.create({
+            data: {
+              productId: item.productId,
+              previousWeight,
+              newWeight,
+              weightDiff,
+              previousClosed,
+              newClosed: item.newClosedUnits,
+              closedDiff,
+            },
+          });
+        }
+      });
+    }
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    revalidatePath('/sales');
+    revalidatePath('/');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error al actualizar inventario masivo:', error);
+    return { success: false, error: error.message || 'Error al actualizar en la base de datos' };
+  }
+}
+
+export async function exportInventoryToExcel() {
+  try {
+    const products = await prisma.product.findMany({
+      include: { openBottles: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const reportData = products.map((p) => {
+      const stockClosed = p.stockClosed || 0;
+      const cost = p.costPrice || 0;
+      const capacity = p.capacity || 0;
+      const tara = p.tareWeight || 0;
+      const rawWeight = p.currentWeight || 0;
+
+      let netMl = 0;
+      let openRatio = 0;
+
+      // Misma lógica de cálculo proporcional que usas en el inventario visual
+      if (p.openBottles && p.openBottles.length > 0) {
+        if (p.measurementMethod === 'PORTION') {
+          openRatio = p.openBottles.reduce((acc, b) => acc + (b.value || 0), 0);
+        } else {
+          netMl = p.openBottles.reduce((acc, b) => acc + Math.max(0, (b.value || 0) - tara), 0);
+          openRatio = capacity > 0 ? netMl / capacity : 0;
+        }
+      } else {
+        if (rawWeight > tara) {
+          netMl = rawWeight - tara;
+          openRatio = capacity > 0 ? netMl / capacity : 0;
+        }
+      }
+
+      // Equivalente total en unidades (ej: 1.5)
+      // Equivalente total en unidades (ej: 1.5)
+      const totalUnitsEquivalent = stockClosed + openRatio;
+
+      const totalValue = (stockClosed * cost) + (openRatio * cost);
+
+      return {
+        'Producto': p.name,
+        'Categoría': p.category,
+        'Subtipo / Región': p.subtype || 'N/D',
+        'Stock Total (Unidades)': Number(totalUnitsEquivalent.toFixed(2)), // <-- AQUÍ MUESTRA EL DECIMAL (Ej: 1.5)
+        'Capacidad (ml/g)': capacity,
+        'Costo Unitario ($)': cost,
+        'Valor Total ($)': Number(totalValue.toFixed(2)),
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(reportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Inventario General');
+
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+
+    return {
+      success: true,
+      fileData: Buffer.from(excelBuffer).toString('base64'),
+      fileName: `Inventario_Barra_${new Date().toISOString().split('T')[0]}.xlsx`,
+    };
+  } catch (error: any) {
+    console.error('Error al exportar Excel:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function updateLogReason(logId: string, reason: string) {
+  try {
+    await prisma.inventoryLog.update({
+      where: { id: logId },
+      data: { reason },
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Error al actualizar la justificación:", error);
+    return { success: false, error: "No se pudo guardar la justificación" };
+  }
+}
+
+// ==========================================
+// GESTIÓN DE ZONAS DINÁMICAS DE INVENTARIO
+// ==========================================
+export async function getInventoryZones() {
+  try {
+    const zones = await prisma.inventoryZone.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(zones)) };
+  } catch (error) {
+    console.error('Error al obtener zonas:', error);
+    return { success: false, data: [] };
+  }
+}
+
+export async function createInventoryZone(name: string) {
+  try {
+    const newZone = await prisma.inventoryZone.create({
+      data: { name: String(name).trim() }
+    });
+    // Ajusta la ruta si tu página se llama diferente
+    revalidatePath('/physical-count'); 
+    return { success: true, data: JSON.parse(JSON.stringify(newZone)) };
+  } catch (error: any) {
+    return { success: false, error: 'La zona ya existe o hubo un error.' };
+  }
+}
+
+export async function deleteInventoryZone(id: string) {
+  try {
+    await prisma.inventoryZone.delete({ where: { id } });
+    revalidatePath('/physical-count');
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: 'Error al eliminar zona.' };
+  }
+}
+
+// ==========================================
+// MÓDULO DE PRODUCCIÓN (BATEO DE JARABES)
+// ==========================================
+export async function getProductionRecipes() {
+  try {
+    // Traemos TODAS las recetas sin filtros restrictivos para que aparezcan pulpas, infusiones, jarabes, etc.
+    const allRecipes = await prisma.recipe.findMany({
+      include: { items: { include: { product: true } } }
+    });
+
+    return { success: true, data: JSON.parse(JSON.stringify(allRecipes)) };
+  } catch (error) {
+    return { success: false, error: 'Error al cargar recetas de producción' };
+  }
+}
+
+export async function registerProduction(recipeId: string, batches: number) {
+  try {
+    const recipe = await prisma.recipe.findUnique({
+      where: { id: recipeId },
+      include: { items: true }
+    });
+    
+    if (!recipe) throw new Error('Receta no encontrada');
+
+    // Buscar el producto en el inventario que corresponde a este jarabe
+    // (Busca si se llama igual, o si tiene el prefijo "[Subreceta]")
+    const targetProduct = await prisma.product.findFirst({
+      where: {
+        OR: [
+          { name: recipe.name },
+          { name: `[Subreceta] ${recipe.name}` },
+          { name: `[SUBRECETA] ${recipe.name}` },
+          { name: { contains: recipe.name } }
+        ]
+      }
+    });
+
+    // Ejecutamos todo en una transacción para que si algo falla, no se descuadre nada
+    await prisma.$transaction(async (tx) => {
+      // 1. Sumar el rendimiento al jarabe final en el inventario
+      if (targetProduct) {
+         const amountToAdd = recipe.yieldQuantity * batches;
+         await tx.product.update({
+           where: { id: targetProduct.id },
+           data: { currentWeight: { increment: amountToAdd } }
+         });
+      }
+
+      // 2. Descontar las cantidades de los insumos utilizados (ej. Azúcar, Limón)
+      for (const item of recipe.items) {
+         const amountToDeduct = item.quantity * batches;
+         await tx.product.update({
+           where: { id: item.productId },
+           data: { currentWeight: { decrement: amountToDeduct } }
+         });
+      }
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}

@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ... tus otros modelos y configuración ...
+
+model Product {
+  id                 String         @id @default(uuid())
+  name               String
+  category           String
+  subtype            String         @default("")
+  capacity           Float          @default(0)
+  unit               String         @default("g")
+  tareWeight         Float          @default(0)
+  currentWeight      Float          @default(0)
+  stockClosed        Int            @default(0) // Stock cerrado en Barra
+  warehouseStock     Int            @default(0) // NUEVO: Stock disponible en Almacén / CEDIS
+  minStock           Float          @default(1.0)
+  maxStock           Float          @default(10.0)
+  costPrice          Float          @default(0)
+  salePrice          Float          @default(0) 
+  glassPrice         Float          @default(0) 
+  supplier           String         @default("")
+  measurementMethod  String         @default("SCALE")
+  warehouseMinStock Float @default(1.0)
+  warehouseMaxStock Float @default(5.0)
+  lastCountMap       Json?          
+
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  openBottles        OpenBottle[]
+  inventoryLogs      InventoryLog[]
+  recipeItems        RecipeItem[]
+  sales              Sale[]
+}
+
+// ¡EL NUEVO MODELO PARA QUE EL USUARIO CREE SUS ZONAS!
+model InventoryZone {
+  id          String   @id @default(uuid())
+  name        String   @unique // Ej: "Cava", "Estantería 1", "Bodega"
+  orderIndex  Int      @default(0) // Para que pueda ordenar cómo aparecen
+  createdAt   DateTime @default(now())
+}
+
+
+
+// NUEVO: Modelo para registrar cada botella abierta de forma independiente (gramos o porción decimal)
+model OpenBottle {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  value     Float    @default(0) // Guarda los gramos (si es báscula) o la porción (ej. 0.5 si es a ojo)
+  createdAt DateTime @default(now())
+}
+
+model Supplier {
+  id          String   @id @default(cuid())
+  name        String   @unique // Nombre comercial del proveedor
+  contactName String?  // Nombre del agente de ventas
+  phone       String?  // Teléfono / WhatsApp
+  email       String?  // Correo electrónico
+  taxId       String?  // RFC o Datos fiscales / Facturación
+  address     String?  // Dirección o sucursal
+  notes       String?  // Notas, días de entrega, etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model InventoryLog {
+  id             String   @id @default(cuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previousWeight Float
+  newWeight      Float
+  weightDiff     Float
+  previousClosed Int
+  newClosed      Int
+  closedDiff     Int
+  reason         String?  // <-- Agregas esta línea para guardar la justificación o nota de la merma
+  createdAt      DateTime @default(now())
+}
+
+model Recipe {
+  id            String   @id @default(cuid())
+  name          String
+  type          String
+  imageUrl      String?
+  category      String?  
+  description   String?
+  yieldQuantity Float        @default(1)  
+  yieldUnit     String       @default("ml") 
+  price         Float?   @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items RecipeItem[]
+  sales Sale[]
+}
+
+model RecipeItem {
+  id        String  @id @default(cuid())
+  recipeId  String
+  recipe    Recipe  @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Float   
+  unit      String? @default("ml")
+}
+
+model Sale {
+  id        String   @id @default(cuid())
+  recipeId  String?
+  recipe    Recipe?  @relation(fields: [recipeId], references: [id])
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  quantity  Int      @default(1)
+  saleMode  String   @default("RECETA")
+  status    String   @default("PENDING")
+  price     Float    @default(0) // <-- Nuevo campo para el precio de venta cobrado
+  cost      Float    @default(0) // <-- Nuevo campo para el costo real de insumos
+  createdAt DateTime @default(now())
+}
+model WarehouseAuditLog {
+  id          String   @id @default(cuid())
+  productId   String
+  productName String
+  previousStock Int
+  physicalStock Int
+  difference  Int      // Ej: -1 (faltante) o +2 (sobrante)
+  unitCost    Float
+  totalLoss   Float    // difference * unitCost (si es negativo representa pérdida)
+  createdAt   DateTime @default(now())
+}
+
+model PurchaseOrder {
+  id           String         @id @default(cuid())
+  supplier     String         @default("")
+  invoiceFolio String         @default("")
+  status       String         @default("PENDING") // PENDING o RECEIVED
+  totalAmount  Float          @default(0)
+  createdAt    DateTime       @default(now())
+  items        PurchaseItem[]
+}
+
+model PurchaseItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  productName     String
+  quantity        Int           @default(1)
+  unitCost        Float         @default(0)
+  subtotal        Float         @default(0)
+}
+
+model SystemSetting {
+  id              String   @id @default("config")
+  appName         String   @default("Altezza Cocina Italiana")
+  backgroundImage String   @default("")
+  updatedAt       DateTime @updatedAt
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Bar Control - Gestión de Inventarios",
+  "short_name": "Bar Control",
+  "description": "Sistema de gestión de inventarios, POS y mermas para barra",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d16",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

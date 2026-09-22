@@ -1,0 +1,165 @@
+'use client';
+
+import React, { useState } from 'react';
+import Link from 'next/link';
+import SalesAuditClient from './SalesAuditClient';
+
+export default function SalesPageClient({
+  recipes,
+  products,
+  pendingSales,
+  existingSuppliers,
+}: {
+  recipes: any[];
+  products: any[];
+  pendingSales: any[];
+  existingSuppliers: string[];
+}) {
+  const [selectedDate, setSelectedDate] = useState('');
+
+  const filteredSales = pendingSales.filter((sale: any) => {
+    if (!selectedDate) return true;
+    
+    const saleDate = new Date(sale.createdAt || Date.now());
+    const year = saleDate.getFullYear();
+    const month = String(saleDate.getMonth() + 1).padStart(2, '0');
+    const day = String(saleDate.getDate()).padStart(2, '0');
+    const saleDateLocal = `${year}-${month}-${day}`;
+
+    return saleDateLocal === selectedDate;
+  });
+
+  return (
+    <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div>
+          <h1 className="text-2xl font-bold text-white">💰 Punto de Venta y Pedidos</h1>
+          <p className="text-sm text-slate-400">
+            Registro ágil de salidas, copeo y control de pedidos por proveedor.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/inventory"
+            className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium px-4 py-2 rounded-lg transition"
+          >
+            ← Ir a Inventario
+          </Link>
+        </div>
+      </div>
+
+      <SalesAuditClient
+        recipes={recipes}
+        products={products}
+        logs={[]}
+        pendingSales={pendingSales}
+        existingSuppliers={existingSuppliers}
+      />
+
+      {/* Tabla de Registro de Ventas */}
+      <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+        <div className="p-4 bg-slate-800/40 border-b border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">📋 Ventas Registradas en el Turno Actual</h2>
+            <span className="text-xs text-amber-400 font-mono">{filteredSales.length} transacciones mostradas (de {pendingSales.length} totales)</span>
+          </div>
+
+          {/* Filtro de Fecha */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">📅 Filtrar fecha:</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-amber-400 font-semibold outline-none focus:border-amber-500 cursor-pointer"
+            />
+            {selectedDate && (
+              <button
+                onClick={() => setSelectedDate('')}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-2.5 py-1.5 rounded-lg transition cursor-pointer"
+                title="Limpiar filtro de fecha"
+              >
+                ✕ Todos
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          {filteredSales.length === 0 ? (
+            <div className="py-8 text-center text-slate-500 text-xs">
+              No hay ventas registradas para la fecha seleccionada.
+            </div>
+          ) : (
+            <table className="w-full text-left text-sm text-slate-300">
+              <thead className="text-xs uppercase bg-slate-950/80 text-slate-400 border-b border-slate-800">
+                <tr>
+                  <th className="py-3 px-4 pl-6">Fecha / Hora</th>
+                  <th className="py-3 px-4">Tipo / Concepto</th>
+                  <th className="py-3 px-4 text-center">Modo</th>
+                  <th className="py-3 px-4 text-center">Cantidad</th>
+                  <th className="py-3 px-4 text-right">Costo de Insumos</th>
+                  <th className="py-3 px-4 text-right pr-6">Precio de Venta / Subtotal</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {filteredSales.map((sale: any, idx: number) => {
+                  const dateFormatted = new Date(sale.createdAt || Date.now()).toLocaleString('es-MX', {
+                    dateStyle: 'short',
+                    timeStyle: 'short',
+                  });
+
+                  // LÓGICA CORREGIDA DE PRECIOS SEGÚN EL MODO DE VENTA
+                  let unitPrice = 0;
+                  let subtotal = 0;
+
+                  if (sale.saleMode === 'COPEO' && sale.product) {
+                    // Si es copeo, toma el precio fijo de la copa (glassPrice)
+                    unitPrice = sale.product.glassPrice || 0;
+                    subtotal = unitPrice * (sale.quantity || 1);
+                  } else if (sale.saleMode === 'BOTELLA' && sale.product) {
+                    // Si es botella completa
+                    unitPrice = sale.product.salePrice || 0;
+                    subtotal = unitPrice * (sale.quantity || 1);
+                  } else {
+                    // Para recetas u otros conceptos
+                    unitPrice = sale.price || sale.recipe?.price || sale.product?.salePrice || 0;
+                    subtotal = unitPrice * (sale.quantity || 1);
+                  }
+
+                  // LECTURA DIRECTA DE COSTO: Usamos directamente el costo exacto calculado y guardado por el servidor
+                  const itemCost = Number(sale.cost || 0);
+
+                  return (
+                    <tr key={sale.id || idx} className="hover:bg-slate-800/50 transition">
+                      <td className="py-3 px-4 pl-6 text-xs font-mono text-slate-400 whitespace-nowrap">
+                        {dateFormatted}
+                      </td>
+                      <td className="py-3 px-4 font-medium text-white">
+                        {sale.recipe?.name ? `🍹 [Cóctel] ${sale.recipe.name}` : sale.product?.name ? `🍾 [Producto] ${sale.product.name}` : 'Venta de barra'}
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="bg-amber-500/10 text-amber-400 text-[10px] font-semibold px-2 py-0.5 rounded border border-amber-500/20">
+                          {sale.saleMode || 'RECETA'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center font-mono text-xs text-slate-300">
+                        {sale.quantity} <span className="text-slate-500">{sale.saleMode === 'BOTELLA' || sale.saleMode === 'RECETA' || sale.saleMode === 'PIEZA' ? 'pza(s)' : 'ml'}</span>
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono text-xs font-bold text-rose-400">
+                        ${itemCost.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-4 text-right pr-6 font-mono text-xs font-bold text-emerald-400">
+                        ${subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
