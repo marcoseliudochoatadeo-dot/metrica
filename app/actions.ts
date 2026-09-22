@@ -874,3 +874,63 @@ export async function registerProduction(recipeId: string, batches: number) {
     return { success: false, error: error.message };
   }
 }
+
+export async function deleteSale(saleId: string) {
+  // 1. Buscar la venta con su receta o producto asociado
+  const sale = await prisma.sale.findUnique({
+    where: { id: saleId },
+    include: {
+      recipe: {
+        include: {
+          items: true,
+        },
+      },
+      product: true,
+    },
+  });
+
+  if (!sale) {
+    throw new Error('La venta no existe.');
+  }
+
+  // 2. Reintegrar el stock al inventario
+  if (sale.recipeId && sale.recipe) {
+    // Si fue un cóctel, devolvemos los mililitros a cada insumo de la receta
+    for (const item of sale.recipe.items) {
+      const mlToReturn = item.quantity * sale.quantity;
+      const product = await prisma.product.findUnique({ where: { id: item.productId } });
+      
+      if (product) {
+        const newWeight = (product.currentWeight || 0) + mlToReturn;
+        await prisma.product.update({
+          where: { id: item.productId },
+          data: { currentWeight: newWeight },
+        });
+      }
+    }
+  } else if (sale.productId && sale.product) {
+    // Si fue venta directa de producto
+    if (sale.saleMode === 'BOTELLA') {
+      await prisma.product.update({
+        where: { id: sale.productId },
+        data: { stockClosed: sale.product.stockClosed + sale.quantity },
+      });
+    } else {
+      const mlPerPortion = sale.product.capacityMl && sale.product.capacityMl > 0 ? 45 : 45; 
+      const totalMl = mlPerPortion * sale.quantity;
+      const newWeight = (sale.product.currentWeight || 0) + totalMl;
+      
+      await prisma.product.update({
+        where: { id: sale.productId },
+        data: { currentWeight: newWeight },
+      });
+    }
+  }
+
+  // 3. Eliminar el registro de la venta
+  await prisma.sale.delete({
+    where: { id: saleId },
+  });
+
+  return { success: true };
+}

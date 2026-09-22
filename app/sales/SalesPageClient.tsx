@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useTransition } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import SalesAuditClient from './SalesAuditClient';
+import { deleteSale } from '@/app/actions'; // Asegúrate de tener la función exportada en tus acciones
 
 export default function SalesPageClient({
   recipes,
@@ -15,7 +17,9 @@ export default function SalesPageClient({
   pendingSales: any[];
   existingSuppliers: string[];
 }) {
+  const router = useRouter();
   const [selectedDate, setSelectedDate] = useState('');
+  const [isPending, startTransition] = useTransition();
 
   const filteredSales = pendingSales.filter((sale: any) => {
     if (!selectedDate) return true;
@@ -28,6 +32,22 @@ export default function SalesPageClient({
 
     return saleDateLocal === selectedDate;
   });
+
+  const handleDelete = (saleId: string) => {
+    if (!confirm('¿Estás seguro de eliminar esta venta? Se reintegrarán los insumos al inventario y se corregirá el stock.')) {
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await deleteSale(saleId);
+        alert('¡Venta eliminada y stock reintegrado con éxito!');
+        router.refresh();
+      } catch (error: any) {
+        alert(`Error al eliminar la venta: ${error.message || 'Error desconocido'}`);
+      }
+    });
+  };
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans">
@@ -99,7 +119,8 @@ export default function SalesPageClient({
                   <th className="py-3 px-4 text-center">Modo</th>
                   <th className="py-3 px-4 text-center">Cantidad</th>
                   <th className="py-3 px-4 text-right">Costo de Insumos</th>
-                  <th className="py-3 px-4 text-right pr-6">Precio de Venta / Subtotal</th>
+                  <th className="py-3 px-4 text-right">Precio de Venta / Subtotal</th>
+                  <th className="py-3 px-4 text-center pr-6">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -109,25 +130,20 @@ export default function SalesPageClient({
                     timeStyle: 'short',
                   });
 
-                  // LÓGICA CORREGIDA DE PRECIOS SEGÚN EL MODO DE VENTA
                   let unitPrice = 0;
                   let subtotal = 0;
 
                   if (sale.saleMode === 'COPEO' && sale.product) {
-                    // Si es copeo, toma el precio fijo de la copa (glassPrice)
                     unitPrice = sale.product.glassPrice || 0;
                     subtotal = unitPrice * (sale.quantity || 1);
                   } else if (sale.saleMode === 'BOTELLA' && sale.product) {
-                    // Si es botella completa
                     unitPrice = sale.product.salePrice || 0;
                     subtotal = unitPrice * (sale.quantity || 1);
                   } else {
-                    // Para recetas u otros conceptos
                     unitPrice = sale.price || sale.recipe?.price || sale.product?.salePrice || 0;
                     subtotal = unitPrice * (sale.quantity || 1);
                   }
 
-                  // LECTURA DIRECTA DE COSTO: Usamos directamente el costo exacto calculado y guardado por el servidor
                   const itemCost = Number(sale.cost || 0);
 
                   return (
@@ -149,8 +165,19 @@ export default function SalesPageClient({
                       <td className="py-3 px-4 text-right font-mono text-xs font-bold text-rose-400">
                         ${itemCost.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
-                      <td className="py-3 px-4 text-right pr-6 font-mono text-xs font-bold text-emerald-400">
+                      <td className="py-3 px-4 text-right font-mono text-xs font-bold text-emerald-400">
                         ${subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-4 text-center pr-6">
+                        <button
+                          type="button"
+                          disabled={isPending}
+                          onClick={() => handleDelete(sale.id)}
+                          className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded-lg border border-rose-500/20 transition cursor-pointer disabled:opacity-50"
+                          title="Eliminar venta y reponer inventario"
+                        >
+                          🗑️ Eliminar
+                        </button>
                       </td>
                     </tr>
                   );
