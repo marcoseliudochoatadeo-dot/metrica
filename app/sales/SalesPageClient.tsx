@@ -4,7 +4,7 @@ import React, { useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import SalesAuditClient from './SalesAuditClient';
-import { deleteSale } from '@/app/actions'; // Asegúrate de tener la función exportada en tus acciones
+import { deleteSale } from '@/app/actions';
 
 export default function SalesPageClient({
   recipes,
@@ -20,6 +20,9 @@ export default function SalesPageClient({
   const router = useRouter();
   const [selectedDate, setSelectedDate] = useState('');
   const [isPending, startTransition] = useTransition();
+  
+  // NUEVO: Estado para llevar el control de las ventas seleccionadas
+  const [selectedSales, setSelectedSales] = useState<string[]>([]);
 
   const filteredSales = pendingSales.filter((sale: any) => {
     if (!selectedDate) return true;
@@ -33,6 +36,7 @@ export default function SalesPageClient({
     return saleDateLocal === selectedDate;
   });
 
+  // Lógica para borrar una sola venta (botón individual)
   const handleDelete = (saleId: string) => {
     if (!confirm('¿Estás seguro de eliminar esta venta? Se reintegrarán los insumos al inventario y se corregirá el stock.')) {
       return;
@@ -47,6 +51,45 @@ export default function SalesPageClient({
         alert(`Error al eliminar la venta: ${error.message || 'Error desconocido'}`);
       }
     });
+  };
+
+  // NUEVO: Lógica para borrar múltiples ventas a la vez
+  const handleBulkDelete = () => {
+    if (!confirm(`¿Estás seguro de eliminar las ${selectedSales.length} ventas seleccionadas? Todo el stock se reintegrará automáticamente.`)) {
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        // Borramos secuencialmente para no saturar la conexión a la base de datos
+        for (const saleId of selectedSales) {
+          await deleteSale(saleId);
+        }
+        alert(`¡${selectedSales.length} ventas eliminadas y stock reintegrado con éxito!`);
+        setSelectedSales([]); // Limpiamos la selección después de borrar
+        router.refresh();
+      } catch (error: any) {
+        alert(`Error al eliminar las ventas: ${error.message || 'Error desconocido'}`);
+      }
+    });
+  };
+
+  // NUEVO: Seleccionar o deseleccionar todas las filas
+  const toggleSelectAll = () => {
+    if (selectedSales.length === filteredSales.length) {
+      setSelectedSales([]);
+    } else {
+      setSelectedSales(filteredSales.map((s: any) => s.id));
+    }
+  };
+
+  // NUEVO: Seleccionar o deseleccionar una fila individual
+  const toggleSelect = (id: string) => {
+    if (selectedSales.includes(id)) {
+      setSelectedSales(selectedSales.filter(saleId => saleId !== id));
+    } else {
+      setSelectedSales([...selectedSales, id]);
+    }
   };
 
   return (
@@ -84,24 +127,37 @@ export default function SalesPageClient({
             <span className="text-xs text-amber-400 font-mono">{filteredSales.length} transacciones mostradas (de {pendingSales.length} totales)</span>
           </div>
 
-          {/* Filtro de Fecha */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400">📅 Filtrar fecha:</span>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-amber-400 font-semibold outline-none focus:border-amber-500 cursor-pointer"
-            />
-            {selectedDate && (
+          <div className="flex items-center gap-4">
+            {/* BOTÓN DE BORRADO MASIVO (Aparece solo si hay seleccionados) */}
+            {selectedSales.length > 0 && (
               <button
-                onClick={() => setSelectedDate('')}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-2.5 py-1.5 rounded-lg transition cursor-pointer"
-                title="Limpiar filtro de fecha"
+                onClick={handleBulkDelete}
+                disabled={isPending}
+                className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-4 py-1.5 rounded-lg shadow-lg transition disabled:opacity-50 flex items-center gap-2"
               >
-                ✕ Todos
+                🗑️ Borrar {selectedSales.length} seleccionadas
               </button>
             )}
+
+            {/* Filtro de Fecha */}
+            <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <span className="text-xs text-slate-400 pl-2">📅 Fecha:</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="bg-transparent border-none px-2 py-1 text-xs text-amber-400 font-semibold outline-none cursor-pointer"
+              />
+              {selectedDate && (
+                <button
+                  onClick={() => setSelectedDate('')}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-2.5 py-1 rounded transition cursor-pointer mr-1"
+                  title="Limpiar filtro de fecha"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -114,7 +170,15 @@ export default function SalesPageClient({
             <table className="w-full text-left text-sm text-slate-300">
               <thead className="text-xs uppercase bg-slate-950/80 text-slate-400 border-b border-slate-800">
                 <tr>
-                  <th className="py-3 px-4 pl-6">Fecha / Hora</th>
+                  <th className="py-3 px-4 pl-6 w-12 text-center">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedSales.length === filteredSales.length && filteredSales.length > 0} 
+                      onChange={toggleSelectAll} 
+                      className="cursor-pointer accent-amber-500 w-4 h-4"
+                    />
+                  </th>
+                  <th className="py-3 px-2">Fecha / Hora</th>
                   <th className="py-3 px-4">Tipo / Concepto</th>
                   <th className="py-3 px-4 text-center">Modo</th>
                   <th className="py-3 px-4 text-center">Cantidad</th>
@@ -130,25 +194,21 @@ export default function SalesPageClient({
                     timeStyle: 'short',
                   });
 
-                  let unitPrice = 0;
-                  let subtotal = 0;
-
-                  if (sale.saleMode === 'COPEO' && sale.product) {
-                    unitPrice = sale.product.glassPrice || 0;
-                    subtotal = unitPrice * (sale.quantity || 1);
-                  } else if (sale.saleMode === 'BOTELLA' && sale.product) {
-                    unitPrice = sale.product.salePrice || 0;
-                    subtotal = unitPrice * (sale.quantity || 1);
-                  } else {
-                    unitPrice = sale.price || sale.recipe?.price || sale.product?.salePrice || 0;
-                    subtotal = unitPrice * (sale.quantity || 1);
-                  }
-
+                  const subtotal = Number(sale.price || 0);
                   const itemCost = Number(sale.cost || 0);
+                  const isSelected = selectedSales.includes(sale.id);
 
                   return (
-                    <tr key={sale.id || idx} className="hover:bg-slate-800/50 transition">
-                      <td className="py-3 px-4 pl-6 text-xs font-mono text-slate-400 whitespace-nowrap">
+                    <tr key={sale.id || idx} className={`transition ${isSelected ? 'bg-amber-500/10' : 'hover:bg-slate-800/50'}`}>
+                      <td className="py-3 px-4 pl-6 text-center">
+                        <input 
+                          type="checkbox" 
+                          checked={isSelected}
+                          onChange={() => toggleSelect(sale.id)}
+                          className="cursor-pointer accent-amber-500 w-4 h-4"
+                        />
+                      </td>
+                      <td className="py-3 px-2 text-xs font-mono text-slate-400 whitespace-nowrap">
                         {dateFormatted}
                       </td>
                       <td className="py-3 px-4 font-medium text-white">

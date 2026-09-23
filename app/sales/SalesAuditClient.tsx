@@ -23,7 +23,7 @@ interface TicketSale {
   name: string;
   qty: number;
   type: 'RECIPE' | 'PRODUCT';
-  saleMode: 'COPEO' | 'BOTELLA' | 'RECETA';
+  saleMode: 'COPEO' | 'BOTELLA' | 'RECETA' | 'PIEZA' | string;
   items: Array<{ productId: string; productName: string; quantity: number }>;
 }
 
@@ -100,39 +100,57 @@ export default function SalesAuditClient({
     opt.label.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // === LÓGICA DE VISIBILIDAD DE BOTONES POR ETIQUETAS/CATEGORÍAS ===
+  const isRecipe = selectedOption?.type === 'RECIPE';
+  const optCatLower = (selectedOption?.data?.category || '').toLowerCase();
+  
+  // Evaluamos directamente por tu sistema de categorías/etiquetas
+  const isStrictPiece = [
+    'mezclador', 'mezcladores', 'refresco', 'agua', 'cerveza', 'cafe', 'café', 'pieza',
+    'mocktail', 'mixologia', 'mixología', 'cocteleria', 'coctelería'
+  ].some(cat => optCatLower.includes(cat));
+  
+  // Mostrar botones solo si NO hay nada seleccionado o si lo seleccionado NO es receta y NO es pieza estricta
+  const showModeToggle = !selectedOption || (!isRecipe && !isStrictPiece);
+
   const handleAddSale = () => {
     if (!selectedOption || quantity <= 0) return;
 
     let saleItems: Array<{ productId: string; productName: string; quantity: number }> = [];
-    let finalSaleMode: 'COPEO' | 'BOTELLA' | 'RECETA' = 'RECETA';
+    let finalSaleMode = 'RECETA';
     let displayLabel = selectedOption.label;
 
     if (selectedOption.type === 'RECIPE') {
+      finalSaleMode = 'RECETA';
       const rawItems = selectedOption.data.ingredients || selectedOption.data.items || [];
       saleItems = rawItems.map((ing: any) => ({
         productId: ing.productId || ing.product?.id,
         productName: ing.product?.name || 'Insumo',
-        quantity: ing.quantity || 0, // Esto está bien para recetas, el backend lo maneja
+        quantity: ing.quantity || 0,
       }));
     } else {
       const prodData = selectedOption.data;
       const cat = (prodData.category || '').toLowerCase();
       const isWine = cat.includes('vino');
-      const isBeerOrSoda = cat.includes('cerveza') || cat.includes('refresco') || cat.includes('bebida');
+      
+      // Aseguramos que la etiqueta la busque correctamente en la categoría
+      const isBeerOrSoda = [
+        'mezclador', 'mezcladores', 'refresco', 'agua', 'cerveza', 'cafe', 'café', 'pieza'
+      ].some(term => cat.includes(term));
 
-      finalSaleMode = saleMode;
       const capacityVal = prodData.capacity || prodData.capacityMl || 750;
 
       if (isBeerOrSoda) {
         displayLabel = `🍺 [Pieza/Lata] ${prodData.name}`;
+        finalSaleMode = 'PIEZA';
       } else if (saleMode === 'BOTELLA') {
         displayLabel = `🍾 [Botella ${capacityVal}ml] ${prodData.name}`;
+        finalSaleMode = 'BOTELLA';
       } else {
         displayLabel = `🥃 [${isWine ? 'Copa 150ml' : 'Copeo 45ml'}] ${prodData.name}`;
+        finalSaleMode = 'COPEO';
       }
 
-      // IMPORTANTE: Aquí ya no guardamos los mililitros en quantity, solo la referencia. 
-      // El backend calculará el volumen total (45ml * qty)
       saleItems = [
         {
           productId: prodData.id,
@@ -174,8 +192,6 @@ export default function SalesAuditClient({
     startTransition(async () => {
       try {
         for (const sale of ticketSales) {
-          // CORRECCIÓN CLAVE: Enviamos sale.qty (las porciones vendidas, ej. 1) 
-          // y 0 en deductionMl para que el backend lo calcule solo basándose en la porción real.
           await createSale(sale.type, sale.originalId, sale.qty, sale.saleMode, 0);
         }
 
@@ -261,39 +277,43 @@ export default function SalesAuditClient({
             )}
           </div>
 
-          <div className="col-span-6 sm:col-span-3 flex bg-slate-950 p-1 rounded-lg border border-slate-800">
-            <button
-              type="button"
-              onClick={() => setSaleMode('COPEO')}
-              className={`flex-1 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
-                saleMode === 'COPEO'
-                  ? 'bg-amber-500 text-slate-950 shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              🥃 Copa/Copeo
-            </button>
-            <button
-              type="button"
-              onClick={() => setSaleMode('BOTELLA')}
-              className={`flex-1 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
-                saleMode === 'BOTELLA'
-                  ? 'bg-amber-500 text-slate-950 shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              🍾 Botella/Pza
-            </button>
+          <div className="col-span-6 sm:col-span-3 min-h-[46px]">
+            {showModeToggle && (
+              <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 h-full">
+                <button
+                  type="button"
+                  onClick={() => setSaleMode('COPEO')}
+                  className={`flex-1 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+                    saleMode === 'COPEO'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🥃 Copa/Copeo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSaleMode('BOTELLA')}
+                  className={`flex-1 py-2 text-xs font-semibold rounded-md transition cursor-pointer ${
+                    saleMode === 'BOTELLA'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🍾 Botella/Pza
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="col-span-3 sm:col-span-2">
+          <div className="col-span-3 sm:col-span-2 min-h-[46px]">
             <input
               type="number"
               min="1"
               value={quantity}
               onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
               placeholder="Cant."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white outline-none focus:border-amber-500 text-center"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white outline-none focus:border-amber-500 text-center h-full"
             />
           </div>
 
@@ -301,7 +321,7 @@ export default function SalesAuditClient({
             type="button"
             onClick={handleAddSale}
             disabled={!selectedOption}
-            className="col-span-3 sm:col-span-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold p-3 rounded-lg text-xs transition cursor-pointer"
+            className="col-span-3 sm:col-span-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold p-3 rounded-lg text-xs transition cursor-pointer min-h-[46px]"
           >
             + Agregar
           </button>

@@ -353,6 +353,7 @@ export async function createSale(
 
         if (!recipe) throw new Error('Receta no encontrada');
 
+        // Costo unitario de preparar UNA sola receta
         const unitCost = recipe.items.reduce((acc: number, item: any) => {
           if (!item.product) return acc;
           const pCost = Number(item.product.costPrice || 0);
@@ -375,8 +376,10 @@ export async function createSale(
           return acc + costPerItemUnit;
         }, 0);
 
+        // Guardamos el costo total y precio total de la venta de forma limpia
         const totalCost = unitCost * quantitySold;
-        const finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (recipe.price || 0) * quantitySold;
+        const baseUnitPrice = recipe.price || 0;
+        const finalPrice = explicitSalePrice > 0 ? explicitSalePrice : baseUnitPrice * quantitySold;
 
         await tx.sale.create({
           data: {
@@ -404,7 +407,7 @@ export async function createSale(
 
         const pCost = Number(product.costPrice || 0);
         const pCap = Number(product.capacity || 750);
-        let unitCost = 0;
+        let totalCost = 0;
         let totalMlToDeduce = 0;
         let modeToSave = saleMode;
         let finalPrice = 0;
@@ -412,14 +415,18 @@ export async function createSale(
         const catLower = (product.category || '').toLowerCase();
         const nameLower = (product.name || '').toLowerCase();
         const isStrictPiece = [
-          'refresco', 'agua', 'coca', 'cafe', 'cápsula', 'capsula', 'lata', 'cerveza', 'jugo', 'mix', 'bebidas'
-        ].some((term) => catLower.includes(term) || nameLower.includes(term));
+          'mezclador', 'mezcladores', 'refresco', 'agua', 'cerveza', 'cafe', 'café', 'pieza',
+          'mocktail', 'mixologia', 'mixología', 'cocteleria', 'coctelería'
+        ].some((cat) => catLower.includes(cat));
 
-        if (isStrictPiece) {
-          unitCost = pCost * quantitySold;
-          totalMlToDeduce = quantitySold;
+        
+
+        if (isStrictPiece || saleMode === 'PIEZA') {
+          // VENTA POR PIEZA / LATA / BOTELLA CERRADA (Ej. Cervezas, Aguas)
+          totalCost = pCost * quantitySold;
           modeToSave = 'PIEZA';
-          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (Number(product.salePrice || 0) * quantitySold);
+          const unitSalePrice = Number(product.salePrice || 0);
+          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (unitSalePrice * quantitySold);
 
           await tx.sale.create({
             data: {
@@ -428,7 +435,7 @@ export async function createSale(
               saleMode: modeToSave,
               status: 'PENDING',
               price: finalPrice,
-              cost: unitCost,
+              cost: totalCost,
             },
           });
 
@@ -439,8 +446,10 @@ export async function createSale(
           });
 
         } else if (saleMode === 'BOTELLA') {
-          unitCost = pCost * quantitySold;
-          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (Number(product.salePrice || 0) * quantitySold);
+          // VENTA DE BOTELLA ENTERA
+          totalCost = pCost * quantitySold;
+          const unitSalePrice = Number(product.salePrice || 0);
+          finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (unitSalePrice * quantitySold);
 
           await tx.sale.create({
             data: {
@@ -449,7 +458,7 @@ export async function createSale(
               saleMode: 'BOTELLA',
               status: 'PENDING',
               price: finalPrice,
-              cost: unitCost,
+              cost: totalCost,
             },
           });
 
@@ -460,7 +469,7 @@ export async function createSale(
           });
 
         } else {
-          // VENTA POR COPEO
+          // VENTA POR COPEO (Licores y Vinos)
           const isWineOrEspumoso = [
             'vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'
           ].some((c) => catLower.includes(c));
@@ -470,20 +479,19 @@ export async function createSale(
           totalMlToDeduce = defaultMl * portions;
 
           const costPerMl = pCap > 0 ? pCost / pCap : 0;
-          unitCost = costPerMl * totalMlToDeduce;
+          totalCost = costPerMl * totalMlToDeduce;
 
-          // Tomamos el glassPrice fijo por copa y lo multiplicamos estrictamente por el número de tragos (portions)
           const glassPrice = Number(product.glassPrice || 0);
           finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (glassPrice * portions);
 
           await tx.sale.create({
             data: {
               productId: itemId,
-              quantity: portions, // Guardamos el número de tragos (ej. 1, 2)
+              quantity: portions, 
               saleMode: 'COPEO',
               status: 'PENDING',
-              price: finalPrice, // Precio exacto: 1 * 180 = 180
-              cost: unitCost,
+              price: finalPrice, 
+              cost: totalCost,
             },
           });
 
@@ -876,14 +884,11 @@ export async function registerProduction(recipeId: string, batches: number) {
 }
 
 export async function deleteSale(saleId: string) {
-  // 1. Buscar la venta con su receta o producto asociado
   const sale = await prisma.sale.findUnique({
     where: { id: saleId },
     include: {
       recipe: {
-        include: {
-          items: true,
-        },
+        include: { items: { include: { product: true } } },
       },
       product: true,
     },
@@ -893,44 +898,56 @@ export async function deleteSale(saleId: string) {
     throw new Error('La venta no existe.');
   }
 
-  // 2. Reintegrar el stock al inventario
-  if (sale.recipeId && sale.recipe) {
-    // Si fue un cóctel, devolvemos los mililitros a cada insumo de la receta
-    for (const item of sale.recipe.items) {
-      const mlToReturn = item.quantity * sale.quantity;
-      const product = await prisma.product.findUnique({ where: { id: item.productId } });
-      
-      if (product) {
-        const newWeight = (product.currentWeight || 0) + mlToReturn;
-        await prisma.product.update({
-          where: { id: item.productId },
-          data: { currentWeight: newWeight },
+  // Metemos todo en una transacción para proteger la base de datos
+  await prisma.$transaction(async (tx) => {
+    
+    // 1. REINTEGRAR INVENTARIO
+    if (sale.recipeId && sale.recipe) {
+      // Es un Cóctel: Devolvemos los insumos usando la función matemática en negativo (para que sume y reempaquete)
+      for (const item of sale.recipe.items) {
+        if (!item.product) continue;
+        const mlReturned = (item.quantity || 0) * sale.quantity;
+        // Mandamos el valor en negativo para invertir la deducción
+        await applyInventoryDeduction(tx, item.product, -mlReturned);
+      }
+    } else if (sale.productId && sale.product) {
+      // Es un Producto Directo
+      const catLower = (sale.product.category || '').toLowerCase();
+      const isStrictPiece = [
+        'mezclador', 'mezcladores', 'refresco', 'agua', 'cerveza', 'cafe', 'café', 'pieza',
+        'mocktail', 'mixologia', 'mixología', 'cocteleria', 'coctelería'
+      ].some((cat) => catLower.includes(cat));
+
+      if (isStrictPiece || sale.saleMode === 'PIEZA' || sale.saleMode === 'BOTELLA') {
+        // Si es pieza entera o botella cerrada, devolvemos la unidad directamente al stock cerrado
+        const currentClosed = Number(sale.product.stockClosed || 0);
+        await tx.product.update({
+          where: { id: sale.productId },
+          data: { stockClosed: currentClosed + sale.quantity },
         });
+      } else {
+        // Es Copeo (Vinos / Licores)
+        const isWineOrEspumoso = [
+          'vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'
+        ].some((c) => catLower.includes(c));
+        
+        const mlPerPortion = isWineOrEspumoso ? 150 : 45; 
+        const mlReturned = mlPerPortion * sale.quantity;
+        
+        // Devolvemos los ml al stock abierto usando la función inversa
+        await applyInventoryDeduction(tx, sale.product, -mlReturned);
       }
     }
-  } else if (sale.productId && sale.product) {
-    // Si fue venta directa de producto
-    if (sale.saleMode === 'BOTELLA') {
-      await prisma.product.update({
-        where: { id: sale.productId },
-        data: { stockClosed: sale.product.stockClosed + sale.quantity },
-      });
-    } else {
-      const mlPerPortion = sale.product.capacityMl && sale.product.capacityMl > 0 ? 45 : 45; 
-      const totalMl = mlPerPortion * sale.quantity;
-      const newWeight = (sale.product.currentWeight || 0) + totalMl;
-      
-      await prisma.product.update({
-        where: { id: sale.productId },
-        data: { currentWeight: newWeight },
-      });
-    }
-  }
 
-  // 3. Eliminar el registro de la venta
-  await prisma.sale.delete({
-    where: { id: saleId },
+    // 2. ELIMINAR EL REGISTRO DE VENTA
+    await tx.sale.delete({
+      where: { id: saleId },
+    });
   });
+
+  revalidatePath('/inventory');
+  revalidatePath('/sales');
+  revalidatePath('/');
 
   return { success: true };
 }
