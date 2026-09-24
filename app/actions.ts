@@ -256,11 +256,11 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       }
     }
 
-    // 2. CALCULAR GLOBAL Y RESTAR (¡Quitamos el Math.max(0, ...) para permitir negativos reales!)
+    // 2. CALCULAR GLOBAL Y RESTAR
     let totalMlGlobal = (stockClosed * pCap) + netOpenMl;
     totalMlGlobal = totalMlGlobal - totalDeductionMl;
 
-    // 3. REDISTRIBUIR (Soportando saldos negativos de manera limpia)
+    // 3. REDISTRIBUIR
     let newClosedUnits = 0;
     let remainderMl = 0;
 
@@ -268,21 +268,16 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       newClosedUnits = Math.floor(totalMlGlobal / pCap);
       remainderMl = totalMlGlobal % pCap;
     } else {
-      // Si el global es negativo (ej. -7 ml), las unidades cerradas quedan en 0 
-      // y el residuo abierto absorbe todo el déficit en negativo.
       newClosedUnits = 0;
       remainderMl = totalMlGlobal; 
     }
 
-    // 4. VOLVER A GUARDAR SEGÚN EL FORMATO DEL MÉTODO
+    // 4. VOLVER A GUARDAR
     let newCurrentWeight = 0;
     if (method === 'PORTION') {
-      // Si es por porción, guardamos la proporción (ej. -7 / 750)
       newCurrentWeight = pCap > 0 ? remainderMl / pCap : 0;
     } else {
-      // Si es por báscula, guardamos el peso en negativo o ajustado con la tara
       if (remainderMl < 0) {
-        // En negativo puro manteniendo la referencia de la tara para que al rellenar cuadre
         newCurrentWeight = tare + remainderMl; 
       } else {
         newCurrentWeight = remainderMl > 0 ? remainderMl + tare : (newClosedUnits > 0 ? tare : 0);
@@ -293,28 +288,49 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       where: { id: product.id },
       data: {
         stockClosed: Math.max(0, newClosedUnits),
-        currentWeight: newCurrentWeight, // Permite valores donde currentWeight < tare para reflejar el faltante negativo
+        currentWeight: newCurrentWeight, 
       },
     });
 
-    // Limpiar el desglose temporal de "openBottles" para forzar la lectura del nuevo peso consolidado
     await tx.openBottle.deleteMany({
       where: { productId: product.id }
     });
 
   } else {
-    // Lógica para frutas, abarrotes y preparaciones
+    // --- AQUÍ EMPIEZA LA MAGIA DEL TRADUCTOR DE UNIDADES ---
     let currentStockClosed = Number(product.stockClosed || 0);
     let currentWeight = Number(product.currentWeight || 0);
+    const capacity = Number(product.capacity || 1); 
+    const unit = (product.unit || 'pz').toLowerCase();
+
+    // La cantidad que manda la receta (ej. 150 de limonada o 1 pza de café)
+    let deduction = totalDeductionMl; 
+
+    // 1. CONVERSIÓN INVISIBLE A LITROS O KILOS
+    if (unit === 'lt' || unit === 'kg') {
+      deduction = deduction / 1000; // Convierte 150 a 0.15
+    }
 
     const isStrictPiece = [
       'refresco', 'agua', 'coca', 'cafe', 'cápsula', 'capsula', 'lata', 'cerveza', 'jugo', 'mix', 'bebidas'
     ].some((term) => catLower.includes(term) || (product.name || '').toLowerCase().includes(term));
 
-    if (isStrictPiece) {
-      currentStockClosed = currentStockClosed - totalDeductionMl; // Permite negativos si es necesario
-    } else {
-      currentWeight = currentWeight - totalDeductionMl;
+    // 2. APLICAR DESCUENTO CON EFECTO CASCADA (ABRIR BOTELLA AUTOMÁTICAMENTE)
+    if (unit === 'lt' || unit === 'kg') {
+      // Si la botella abierta no tiene suficiente líquido, abrimos una nueva
+      if (currentWeight < deduction && currentStockClosed > 0) {
+        currentStockClosed -= 1;          // Quitamos 1 botella del stock cerrado
+        currentWeight += capacity;        // "Servimos" toda la capacidad (ej. 2 lt) a la abierta
+      }
+      currentWeight = currentWeight - deduction; // Hacemos la resta matemática (ej. 2 - 0.15 = 1.85)
+    } 
+    else if (isStrictPiece && unit === 'pz') {
+      // Lógica para piezas enteras reales (Cápsulas de café, lata de coca, cerveza)
+      currentStockClosed = currentStockClosed - deduction; 
+    } 
+    else {
+      // Lógica para insumos dados de alta en "ml" o "g" puros (jarabes, pulpas)
+      currentWeight = currentWeight - deduction;
     }
 
     await tx.product.update({
@@ -950,4 +966,108 @@ export async function deleteSale(saleId: string) {
   revalidatePath('/');
 
   return { success: true };
+}
+
+// ==========================================
+// MÓDULO DE REQUISICIONES / TRASPASOS
+// ==========================================
+
+export async function createRequisitionOrder(items: { productId: string; quantityRequested: number }[]) {
+  try {
+    if (!items || items.length === 0) {
+      return { success: false, error: 'No hay productos en la requisición' };
+    }
+
+    const newOrder = await prisma.requisitionOrder.create({
+      data: {
+        status: 'PENDING',
+        items: {
+          create: items.map((item) => ({
+            productId: item.productId,
+            quantityRequested: item.quantityRequested,
+            quantityDelivered: 0,
+          })),
+        },
+      },
+      include: {
+        items: {
+          include: { product: true },
+        },
+      },
+    });
+
+    revalidatePath('/requisitions');
+    return { success: true, data: JSON.parse(JSON.stringify(newOrder)) };
+  } catch (error: any) {
+    console.error('Error al crear requisición:', error);
+    return { success: false, error: error.message || 'Error al guardar la orden en standby' };
+  }
+}
+
+export async function getPendingRequisitions() {
+  try {
+    const orders = await prisma.requisitionOrder.findMany({
+      where: { status: 'PENDING' },
+      include: {
+        items: {
+          include: { product: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(orders)) };
+  } catch (error: any) {
+    console.error('Error al obtener requisiciones pendientes:', error);
+    return { success: false, data: [] };
+  }
+}
+
+export async function confirmRequisitionOrder(orderId: string, deliveredItems: { itemId: string; quantityDelivered: number }[]) {
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. Cambiar el estado de la orden a COMPLETED
+      await tx.requisitionOrder.update({
+        where: { id: orderId },
+        data: { status: 'COMPLETED' },
+      });
+
+      for (const item of deliveredItems) {
+        // Actualizar la cantidad entregada en el ítem de la requisición
+        await tx.requisitionItem.update({
+          where: { id: item.itemId },
+          data: { quantityDelivered: item.quantityDelivered },
+        });
+
+        // Buscar el ítem con su producto asociado
+        const reqItem = await tx.requisitionItem.findUnique({
+          where: { id: item.itemId },
+          include: { product: true },
+        });
+
+        if (reqItem && reqItem.product) {
+          const qtyDelivered = Number(item.quantityDelivered || 0);
+          
+          const currentBarStock = Number(reqItem.product.stockClosed || 0);
+          const currentWarehouseStock = Number(reqItem.product.warehouseStock || 0);
+
+          // 2. Actualizar: Sumar a Barra (stockClosed) y RESTAR de Almacén (warehouseStock)
+          await tx.product.update({
+            where: { id: reqItem.productId },
+            data: { 
+              stockClosed: currentBarStock + qtyDelivered,
+              warehouseStock: Math.max(0, currentWarehouseStock - qtyDelivered),
+            },
+          });
+        }
+      }
+    });
+
+    revalidatePath('/requisitions');
+    revalidatePath('/inventory');
+    revalidatePath('/warehouse');
+    return { success: true, message: 'Requisición confirmada e inventario actualizado con éxito.' };
+  } catch (error: any) {
+    console.error('Error al confirmar requisición:', error);
+    return { success: false, error: error.message || 'Error al procesar la entrega' };
+  }
 }

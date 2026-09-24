@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://postgres.epozwiakwvlebxxtjdzc:8hFF3K56m1OnhDWb@aws-0-us-west-2.pooler.supabase.com:6543/postgres?pgbouncer=true"
+  url      = "postgresql://postgres:8hFF3K56m1OnhDWb@db.epozwiakwvlebxxtjdzc.supabase.co:5432/postgres"
 }
 
 // ... tus otros modelos y configuración ...
@@ -38,6 +38,7 @@ model Product {
   inventoryLogs      InventoryLog[]
   recipeItems        RecipeItem[]
   sales              Sale[]
+  requisitionItems RequisitionItem[]
 }
 
 // ¡EL NUEVO MODELO PARA QUE EL USUARIO CREE SUS ZONAS!
@@ -164,4 +165,21 @@ model SystemSetting {
   appName         String   @default("Altezza Cocina Italiana")
   backgroundImage String   @default("")
   updatedAt       DateTime @updatedAt
+}
+
+model RequisitionOrder {
+  id        String            @id @default(uuid())
+  status    String            @default("PENDING") // PENDING, COMPLETED, CANCELLED
+  createdAt DateTime          @default(now())
+  items     RequisitionItem[]
+}
+
+model RequisitionItem {
+  id                 String           @id @default(uuid())
+  orderId            String
+  order              RequisitionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId          String
+  product            Product          @relation(fields: [productId], references: [id])
+  quantityRequested  Float
+  quantityDelivered  Float?           @default(0)
 }
