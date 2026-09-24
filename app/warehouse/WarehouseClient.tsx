@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { registerWarehouseAdjustment } from '@/app/actions'; // <-- Importamos la Server Action
 
 interface ProductItem {
   id: string;
@@ -63,6 +64,14 @@ export default function WarehouseClient({
   // Estados locales para edición rápida de Límites de Almacén
   const [limitsState, setLimitsState] = useState<{ [key: string]: { min: number; max: number } }>({});
   const [savingLimitId, setSavingLimitId] = useState<string | null>(null);
+
+  // ESTADOS PARA EL MODAL DE MERMAS / AJUSTES
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
+  const [adjSearchTerm, setAdjSearchTerm] = useState('');
+  const [adjProductId, setAdjProductId] = useState('');
+  const [adjType, setAdjType] = useState<'MERMA' | 'SOBRANTE'>('MERMA');
+  const [adjQty, setAdjQty] = useState<number>(1);
+  const [isAdjusting, setIsAdjusting] = useState(false);
 
   // Función para determinar si usa piezas o gramaje estricto
   const getProductUnit = (p: ProductItem) => {
@@ -137,8 +146,38 @@ export default function WarehouseClient({
     }
   };
 
+  // MANEJADOR PARA GUARDAR LA MERMA/AJUSTE
+  const handleSubmitAdjustment = async () => {
+    if (!adjProductId || adjQty <= 0) {
+      alert('Selecciona un producto y una cantidad válida mayor a 0.');
+      return;
+    }
+
+    try {
+      setIsAdjusting(true);
+      // Si es merma, la cantidad es negativa para que descuente. Si es sobrante, es positiva.
+      const finalQty = adjType === 'MERMA' ? -Math.abs(adjQty) : Math.abs(adjQty);
+      
+      const res = await registerWarehouseAdjustment(adjProductId, finalQty);
+      
+      if (!res.success) throw new Error(res.error);
+      
+      alert(res.message);
+      setIsAdjustModalOpen(false);
+      setAdjSearchTerm('');
+      setAdjProductId('');
+      setAdjQty(1);
+      setAdjType('MERMA');
+      router.refresh();
+    } catch (error: any) {
+      alert(error.message || 'Error al registrar el ajuste.');
+    } finally {
+      setIsAdjusting(false);
+    }
+  };
+
   return (
-    <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans text-slate-100">
+    <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans text-slate-100 relative">
       {/* Cabecera */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
@@ -149,7 +188,13 @@ export default function WarehouseClient({
             Control de existencias globales, auditoría, mermas y configuración de umbrales.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => setIsAdjustModalOpen(true)}
+            className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition shadow flex items-center gap-2 cursor-pointer"
+          >
+            📉 Registrar Merma / Ajuste
+          </button>
           <Link
             href="/purchases"
             className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs px-4 py-2.5 rounded-lg transition shadow"
@@ -405,7 +450,7 @@ export default function WarehouseClient({
                           ${Number(log.unitCost).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="py-3 px-4 text-right pr-6 font-mono text-xs font-bold text-rose-400">
-                          {loss > 0 ? `-$${loss.toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '$0.00'}
+                          {loss < 0 ? `-$${Math.abs(loss).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '$0.00'}
                         </td>
                       </tr>
                     );
@@ -511,6 +556,106 @@ export default function WarehouseClient({
             )}
           </div>
         </section>
+      )}
+
+      {/* MODAL DE AJUSTE / MERMA */}
+      {isAdjustModalOpen && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="bg-slate-800/50 p-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                📉 Registrar Ajuste de Almacén
+              </h3>
+              <button 
+                onClick={() => setIsAdjustModalOpen(false)}
+                className="text-slate-400 hover:text-white transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* Buscador de Insumo */}
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Insumo a modificar</label>
+                <input
+                  list="adjust-products-list"
+                  type="text"
+                  value={adjSearchTerm}
+                  onChange={(e) => {
+                    setAdjSearchTerm(e.target.value);
+                    const prod = products.find((p) => p.name.toLowerCase() === e.target.value.trim().toLowerCase());
+                    setAdjProductId(prod ? prod.id : '');
+                  }}
+                  placeholder="Escribe para buscar..."
+                  className="w-full bg-slate-950 border border-slate-800 text-white rounded-lg p-3 text-sm outline-none focus:border-amber-500"
+                />
+                <datalist id="adjust-products-list">
+                  {products.map((p) => (
+                    <option key={`adj-${p.id}`} value={p.name} />
+                  ))}
+                </datalist>
+                {adjProductId && (
+                  <p className="text-xs text-emerald-400 mt-1.5 font-medium">✓ Producto seleccionado correctamente</p>
+                )}
+              </div>
+
+              {/* Tipo de Ajuste */}
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2">Tipo de movimiento</label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setAdjType('MERMA')}
+                    className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition border ${
+                      adjType === 'MERMA' 
+                        ? 'bg-rose-500/20 border-rose-500 text-rose-400' 
+                        : 'bg-slate-950 border-slate-800 text-slate-500 hover:bg-slate-800'
+                    }`}
+                  >
+                    Merma (Descontar)
+                  </button>
+                  <button
+                    onClick={() => setAdjType('SOBRANTE')}
+                    className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition border ${
+                      adjType === 'SOBRANTE' 
+                        ? 'bg-sky-500/20 border-sky-500 text-sky-400' 
+                        : 'bg-slate-950 border-slate-800 text-slate-500 hover:bg-slate-800'
+                    }`}
+                  >
+                    Sobrante (Sumar)
+                  </button>
+                </div>
+              </div>
+
+              {/* Cantidad */}
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Cantidad de piezas / unidades</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={adjQty}
+                  onChange={(e) => setAdjQty(parseInt(e.target.value) || 1)}
+                  className="w-full bg-slate-950 border border-slate-800 text-white rounded-lg p-3 text-center text-lg outline-none focus:border-amber-500 font-mono font-bold"
+                />
+              </div>
+
+              {/* Botón Guardar */}
+              <button
+                disabled={!adjProductId || isAdjusting}
+                onClick={handleSubmitAdjustment}
+                className={`w-full py-3 rounded-lg text-sm font-bold transition uppercase tracking-wider shadow-lg ${
+                  !adjProductId || isAdjusting 
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                    : adjType === 'MERMA' 
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white' 
+                      : 'bg-sky-600 hover:bg-sky-500 text-white'
+                }`}
+              >
+                {isAdjusting ? 'Procesando...' : `Confirmar ${adjType === 'MERMA' ? 'Merma' : 'Sobrante'}`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

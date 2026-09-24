@@ -1,17 +1,16 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { revalidatePath } from 'next/cache'; // <-- AGREGAMOS ESTA IMPORTACIÓN
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { orderId, receivedItems } = body; 
-    // receivedItems es un array de { productId, quantity } de los productos que SÍ llegaron y se palomearon
 
     if (!orderId || !receivedItems || !Array.isArray(receivedItems)) {
       return NextResponse.json({ error: 'Datos incompletos para recibir la orden.' }, { status: 400 });
     }
 
-    // Buscamos la orden
     const order = await prisma.purchaseOrder.findUnique({
       where: { id: orderId },
       include: { items: true },
@@ -25,9 +24,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Esta orden ya fue recibida anteriormente.' }, { status: 400 });
     }
 
-    // Ejecutamos la transacción para actualizar stock de almacén y marcar la orden como recibida
     await prisma.$transaction(async (tx) => {
-      // 1. Actualizar stock en CEDIS solo para los items validados
+      // 1. Actualizar stock en CEDIS
       for (const item of receivedItems) {
         if (item.quantity > 0) {
           await tx.product.update({
@@ -47,6 +45,10 @@ export async function POST(request: Request) {
         data: { status: 'RECEIVED' },
       });
     });
+
+    // <-- AGREGAMOS ESTAS DOS LÍNEAS PARA LIMPIAR EL CACHÉ Y REFRESCAR LA PANTALLA
+    revalidatePath('/purchases');
+    revalidatePath('/warehouse');
 
     return NextResponse.json({ success: true, message: '¡Orden recibida y stock cargado al almacén con éxito!' });
   } catch (error: any) {

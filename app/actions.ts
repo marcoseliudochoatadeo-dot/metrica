@@ -1071,3 +1071,73 @@ export async function confirmRequisitionOrder(orderId: string, deliveredItems: {
     return { success: false, error: error.message || 'Error al procesar la entrega' };
   }
 }
+// ==========================================
+// HISTORIAL DE COMPRAS
+// ==========================================
+
+export async function getPurchaseHistory() {
+  try {
+    const history = await prisma.purchaseOrder.findMany({
+      where: { 
+        status: 'RECEIVED' // Filtra solo las compras ya recibidas/aprobadas
+      },
+      include: {
+        items: true, // Trae el desglose de productos comprados
+      },
+      orderBy: {
+        createdAt: 'desc', // Las compras más recientes primero
+      },
+    });
+    return { success: true, data: JSON.parse(JSON.stringify(history)) };
+  } catch (error: any) {
+    console.error('Error al obtener historial de compras:', error);
+    return { success: false, error: error.message || 'Error al cargar el historial' };
+  }
+}
+
+// ==========================================
+// MERMAS Y AJUSTES DE ALMACÉN
+// ==========================================
+
+export async function registerWarehouseAdjustment(productId: string, adjustmentQty: number) {
+  try {
+    await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findUnique({
+        where: { id: productId },
+      });
+
+      if (!product) throw new Error("Producto no encontrado");
+
+      const currentStock = Number(product.warehouseStock || 0);
+      
+      // adjustmentQty será negativo si es merma (ej. -2), o positivo si es sobrante (ej. +1)
+      const newStock = Math.max(0, currentStock + adjustmentQty);
+      const difference = newStock - currentStock;
+
+      // 1. Actualizar el stock en almacén
+      await tx.product.update({
+        where: { id: productId },
+        data: { warehouseStock: newStock },
+      });
+
+      // 2. Registrar en el historial de auditoría de almacén
+      await tx.warehouseAuditLog.create({
+        data: {
+          productId: product.id,
+          productName: product.name,
+          previousStock: currentStock,
+          physicalStock: newStock,
+          difference: difference,
+          unitCost: product.costPrice || 0,
+          totalLoss: difference * (product.costPrice || 0),
+        },
+      });
+    });
+
+    revalidatePath('/warehouse');
+    return { success: true, message: 'Ajuste de almacén registrado con éxito.' };
+  } catch (error: any) {
+    console.error('Error al registrar ajuste de almacén:', error);
+    return { success: false, error: error.message || 'Error al procesar el ajuste' };
+  }
+}

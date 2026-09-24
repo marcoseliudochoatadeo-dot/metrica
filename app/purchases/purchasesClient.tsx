@@ -50,13 +50,15 @@ export default function PurchasesClient({
   products = [],
   existingSuppliers = [],
   pendingOrders = [],
+  historyOrders = [],
 }: {
   products: ProductItem[];
   existingSuppliers: string[];
   pendingOrders: PurchaseOrderDB[];
+  historyOrders?: PurchaseOrderDB[];
 }) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'NEW' | 'PENDING'>('NEW');
+  const [activeTab, setActiveTab] = useState<'NEW' | 'PENDING' | 'HISTORY'>('NEW');
 
   const [supplier, setSupplier] = useState('');
   const [invoiceFolio, setInvoiceFolio] = useState('');
@@ -68,7 +70,6 @@ export default function PurchasesClient({
   const [purchaseList, setPurchaseList] = useState<PurchaseItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Estados para la validación de órdenes pendientes (Recepción con palomeo)
   const [receivingOrderId, setReceivingOrderId] = useState<string | null>(null);
   const [checkedItems, setCheckedItems] = useState<{ [key: string]: boolean }>({});
   const [receivedQuantities, setReceivedQuantities] = useState<{ [key: string]: number }>({});
@@ -211,14 +212,13 @@ export default function PurchasesClient({
     }
   };
 
-  // Iniciar la recepción de una orden específica
   const handleOpenReceiveModal = (order: PurchaseOrderDB) => {
     setReceivingOrderId(order.id);
     const initialChecks: { [key: string]: boolean } = {};
     const initialQtys: { [key: string]: number } = {};
     
     order.items.forEach((item) => {
-      initialChecks[item.id] = true; // Por defecto todos llegan palomeados
+      initialChecks[item.id] = true;
       initialQtys[item.id] = item.quantity;
     });
 
@@ -226,10 +226,9 @@ export default function PurchasesClient({
     setReceivedQuantities(initialQtys);
   };
 
-  // Confirmar recepción de factura y cargar stock al almacén
   const handleConfirmReceiveOrder = async (order: PurchaseOrderDB) => {
     const itemsToReceive = order.items
-      .filter((item) => checkedItems[item.id]) // Solo los que tienen palomita
+      .filter((item) => checkedItems[item.id])
       .map((item) => ({
         productId: item.productId,
         quantity: receivedQuantities[item.id] !== undefined ? receivedQuantities[item.id] : item.quantity,
@@ -268,14 +267,13 @@ export default function PurchasesClient({
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans text-slate-100">
-      {/* Cabecera */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-            📦 Módulo de Compras y Órdenes en Standby
+            📦 Módulo de Compras e Historial
           </h1>
           <p className="text-sm text-slate-400">
-            Genera órdenes de compra y valida tus facturas físicas antes de cargar el inventario al Almacén.
+            Genera órdenes, valida facturas físicas y consulta el historial de ingresos al almacén.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -294,8 +292,7 @@ export default function PurchasesClient({
         </div>
       </div>
 
-      {/* Pestañas de Navegación */}
-      <div className="flex gap-3 bg-slate-900 border border-slate-800 p-2 rounded-xl shadow-lg w-fit">
+      <div className="flex gap-3 bg-slate-900 border border-slate-800 p-2 rounded-xl shadow-lg w-fit overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveTab('NEW')}
@@ -303,7 +300,7 @@ export default function PurchasesClient({
             activeTab === 'NEW' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
           }`}
         >
-          ➕ Nueva Orden de Compra
+          ➕ Nueva Orden
         </button>
         <button
           type="button"
@@ -312,19 +309,26 @@ export default function PurchasesClient({
             activeTab === 'PENDING' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
           }`}
         >
-          <span>⏳ Órdenes en Standby / Facturas Pendientes</span>
+          <span>⏳ Facturas Pendientes</span>
           {pendingOrders.length > 0 && (
             <span className="bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full font-mono">
               {pendingOrders.length}
             </span>
           )}
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('HISTORY')}
+          className={`px-5 py-2.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-2 ${
+            activeTab === 'HISTORY' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+          }`}
+        >
+          <span>📜 Historial de Compras</span>
+        </button>
       </div>
 
-      {activeTab === 'NEW' ? (
-        /* VISTA 1: CREAR NUEVA COMPRA */
+      {activeTab === 'NEW' && (
         <div className="space-y-6">
-          {/* Datos Generales */}
           <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
             <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
               📝 Datos de la Factura / Proveedor
@@ -360,7 +364,6 @@ export default function PurchasesClient({
             </div>
           </section>
 
-          {/* Adición de Insumos */}
           <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
@@ -371,7 +374,7 @@ export default function PurchasesClient({
                 onClick={handleLoadLowStockItems}
                 className="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-400 font-bold px-3 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
               >
-                📥 Cargar Insumos en Reorden de Almacén
+                📥 Cargar Insumos en Reorden
               </button>
             </div>
 
@@ -429,10 +432,9 @@ export default function PurchasesClient({
             </div>
           </section>
 
-          {/* Detalle de la Compra */}
           <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
             <div className="p-4 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center">
-              <h2 className="text-sm font-semibold text-white">📋 Detalle de la Compra en Standby</h2>
+              <h2 className="text-sm font-semibold text-white">📋 Detalle de la Compra</h2>
               <div className="text-sm font-bold text-emerald-400 font-mono">
                 Total: ${grandTotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
               </div>
@@ -441,15 +443,15 @@ export default function PurchasesClient({
             <div className="overflow-x-auto">
               {purchaseList.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 text-xs">
-                  No hay insumos agregados a esta orden. Usa el buscador o carga los faltantes de almacén.
+                  No hay insumos agregados a esta orden.
                 </div>
               ) : (
                 <table className="w-full text-left text-sm text-slate-300">
                   <thead className="text-xs uppercase bg-slate-950/80 text-slate-400 border-b border-slate-800">
                     <tr>
                       <th className="py-3 px-4 pl-6">Producto</th>
-                      <th className="py-3 px-4 text-center">Stock Actual (CEDIS)</th>
-                      <th className="py-3 px-4 text-center">Piezas a Comprar</th>
+                      <th className="py-3 px-4 text-center">Stock Actual</th>
+                      <th className="py-3 px-4 text-center">Piezas</th>
                       <th className="py-3 px-4 text-right">Costo Unit.</th>
                       <th className="py-3 px-4 text-right">Subtotal</th>
                       <th className="py-3 px-4 text-center pr-6">Acción</th>
@@ -460,24 +462,25 @@ export default function PurchasesClient({
                       <tr key={item.productId} className="hover:bg-slate-800/50 transition">
                         <td className="py-3 px-4 pl-6 font-medium text-white">{item.productName}</td>
                         <td className="py-3 px-4 text-center font-mono text-slate-400">{item.currentStockDisplay}</td>
-<td className="py-3 px-4 text-center font-mono">
-  <input
-    type="number"
-    min="1"
-    value={item.quantity}
-    onChange={(e) => {
-      const newQty = parseInt(e.target.value) || 1;
-      setPurchaseList((prev) =>
-        prev.map((i) =>
-          i.productId === item.productId
-            ? { ...i, quantity: newQty, totalCost: newQty * i.unitCost }
-            : i
-        )
-      );
-    }}
-    className="w-20 bg-slate-950 border border-slate-800 rounded p-1 text-center text-amber-400 text-xs font-bold outline-none focus:border-amber-500"
-  />
-</td>                        <td className="py-3 px-4 text-right font-mono">${item.unitCost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
+                        <td className="py-3 px-4 text-center font-mono">
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const newQty = parseInt(e.target.value) || 1;
+                              setPurchaseList((prev) =>
+                                prev.map((i) =>
+                                  i.productId === item.productId
+                                    ? { ...i, quantity: newQty, totalCost: newQty * i.unitCost }
+                                    : i
+                                )
+                              );
+                            }}
+                            className="w-20 bg-slate-950 border border-slate-800 rounded p-1 text-center text-amber-400 text-xs font-bold outline-none focus:border-amber-500"
+                          />
+                        </td>                        
+                        <td className="py-3 px-4 text-right font-mono">${item.unitCost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
                         <td className="py-3 px-4 text-right font-mono text-emerald-400 font-bold">${item.totalCost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
                         <td className="py-3 px-4 text-center pr-6">
                           <button
@@ -509,40 +512,36 @@ export default function PurchasesClient({
             )}
           </section>
         </div>
-      ) : (
-        /* VISTA 2: ÓRDENES PENDIENTES / RECEPCIÓN DE FACTURAS */
+      )}
+
+      {activeTab === 'PENDING' && (
         <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
           <div className="p-4 bg-slate-800/40 border-b border-slate-800">
             <h2 className="text-sm font-semibold text-white">⏳ Órdenes de Compra Pendientes de Recepción (Standby)</h2>
-            <p className="text-xs text-slate-400">Compara tu factura física, palomea lo que llegó, ajusta faltantes por desabasto y confirma para inyectar al Almacén.</p>
+            <p className="text-xs text-slate-400">Compara tu factura física, palomea lo que llegó y confirma para inyectar al Almacén.</p>
           </div>
-
           <div className="p-6">
             {pendingOrders.length === 0 ? (
               <div className="py-12 text-center text-slate-500 text-xs">
-                No hay órdenes de compra en standby en este momento.
+                No hay órdenes de compra en standby.
               </div>
             ) : (
               <div className="space-y-6">
                 {pendingOrders.map((order) => {
                   const isReceiving = receivingOrderId === order.id;
-                  const dateStr = new Date(order.createdAt).toLocaleDateString('es-MX', {
-                    dateStyle: 'medium',
-                  });
-
+                  const dateStr = new Date(order.createdAt).toLocaleDateString('es-MX', { dateStyle: 'medium' });
                   return (
                     <div key={order.id} className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4 shadow-lg">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
                         <div>
                           <div className="text-sm font-bold text-white flex items-center gap-2">
-                            <span>🏢 Proveedor: {order.supplier || 'General'}</span>
+                            <span>🏢 {order.supplier || 'Proveedor General'}</span>
                             <span className="text-xs text-amber-400 font-mono bg-amber-500/10 px-2 py-0.5 rounded">
                               Folio: {order.invoiceFolio}
                             </span>
                           </div>
-                          <div className="text-xs text-slate-400 mt-1">Fecha de orden: {dateStr}</div>
+                          <div className="text-xs text-slate-400 mt-1">Fecha: {dateStr}</div>
                         </div>
-
                         <div className="flex items-center gap-3">
                           <div className="text-sm font-bold text-emerald-400 font-mono">
                             Total: ${order.totalAmount.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
@@ -553,7 +552,7 @@ export default function PurchasesClient({
                               onClick={() => handleOpenReceiveModal(order)}
                               className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-4 py-2 rounded-lg text-xs transition cursor-pointer shadow"
                             >
-                              📋 Revisar y Recibir Factura
+                              📋 Revisar y Recibir
                             </button>
                           ) : (
                             <button
@@ -566,8 +565,6 @@ export default function PurchasesClient({
                           )}
                         </div>
                       </div>
-
-                      {/* Lista de productos de la orden */}
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-sm text-slate-300">
                           <thead className="text-xs uppercase bg-slate-900/60 text-slate-400 border-b border-slate-800">
@@ -575,7 +572,7 @@ export default function PurchasesClient({
                               {isReceiving && <th className="py-2.5 px-3 text-center w-12">Recibido</th>}
                               <th className="py-2.5 px-3 pl-4">Producto</th>
                               <th className="py-2.5 px-3 text-center">Cantidad Pedida</th>
-                              {isReceiving && <th className="py-2.5 px-3 text-center">Cantidad Real (Factura)</th>}
+                              {isReceiving && <th className="py-2.5 px-3 text-center">Cantidad Real</th>}
                               <th className="py-2.5 px-3 text-right">Costo Unit.</th>
                               <th className="py-2.5 px-3 text-right pr-4">Subtotal</th>
                             </tr>
@@ -584,7 +581,6 @@ export default function PurchasesClient({
                             {order.items.map((item) => {
                               const isChecked = checkedItems[item.id] ?? true;
                               const currentQty = receivedQuantities[item.id] ?? item.quantity;
-
                               return (
                                 <tr key={item.id} className={`hover:bg-slate-900/30 transition ${!isChecked && isReceiving ? 'opacity-40 line-through' : ''}`}>
                                   {isReceiving && (
@@ -592,19 +588,13 @@ export default function PurchasesClient({
                                       <input
                                         type="checkbox"
                                         checked={isChecked}
-                                        onChange={(e) => {
-                                          setCheckedItems((prev) => ({
-                                            ...prev,
-                                            [item.id]: e.target.checked,
-                                          }));
-                                        }}
+                                        onChange={(e) => setCheckedItems((prev) => ({ ...prev, [item.id]: e.target.checked }))}
                                         className="w-4 h-4 accent-emerald-500 cursor-pointer"
                                       />
                                     </td>
                                   )}
                                   <td className="py-2.5 px-3 pl-4 font-medium text-white">{item.productName}</td>
                                   <td className="py-2.5 px-3 text-center font-mono text-slate-400">{item.quantity} pzas</td>
-                                  
                                   {isReceiving && (
                                     <td className="py-2.5 px-3 text-center font-mono">
                                       <input
@@ -612,18 +602,11 @@ export default function PurchasesClient({
                                         min="0"
                                         disabled={!isChecked}
                                         value={currentQty}
-                                        onChange={(e) => {
-                                          const val = parseInt(e.target.value) || 0;
-                                          setReceivedQuantities((prev) => ({
-                                            ...prev,
-                                            [item.id]: val,
-                                          }));
-                                        }}
+                                        onChange={(e) => setReceivedQuantities((prev) => ({ ...prev, [item.id]: parseInt(e.target.value) || 0 }))}
                                         className="w-20 bg-slate-900 border border-slate-700 rounded p-1 text-center text-white text-xs font-bold outline-none focus:border-amber-500 disabled:opacity-50"
                                       />
                                     </td>
                                   )}
-
                                   <td className="py-2.5 px-3 text-right font-mono">${item.unitCost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
                                   <td className="py-2.5 px-3 text-right pr-4 font-mono text-emerald-400 font-bold">${item.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
                                 </tr>
@@ -632,8 +615,6 @@ export default function PurchasesClient({
                           </tbody>
                         </table>
                       </div>
-
-                      {/* Botón de confirmación si está en modo recepción */}
                       {isReceiving && (
                         <div className="pt-3 border-t border-slate-800 flex justify-end gap-3">
                           <button
@@ -642,10 +623,77 @@ export default function PurchasesClient({
                             onClick={() => handleConfirmReceiveOrder(order)}
                             className="bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-800 text-slate-950 font-bold px-6 py-2.5 rounded-xl text-xs transition cursor-pointer uppercase tracking-wider shadow"
                           >
-                            {loading ? 'Procesando...' : '🚀 Confirmar Recepción y Cargar al Almacén'}
+                            {loading ? 'Procesando...' : '🚀 Confirmar Recepción y Cargar'}
                           </button>
                         </div>
                       )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* VISTA 3: HISTORIAL DE COMPRAS */}
+      {activeTab === 'HISTORY' && (
+        <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+          <div className="p-4 bg-slate-800/40 border-b border-slate-800">
+            <h2 className="text-sm font-semibold text-white">📜 Historial de Órdenes Aprobadas</h2>
+            <p className="text-xs text-slate-400">Consulta todas las facturas y compras que ya han ingresado oficialmente a tu inventario.</p>
+          </div>
+          <div className="p-6">
+            {historyOrders.length === 0 ? (
+              <div className="py-12 text-center text-slate-500 text-xs">
+                Aún no hay compras registradas en el historial.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {historyOrders.map((order) => {
+                  const dateStr = new Date(order.createdAt).toLocaleDateString('es-MX', { dateStyle: 'long' });
+                  return (
+                    <div key={order.id} className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                        <div>
+                          <div className="text-sm font-bold text-white flex items-center gap-2">
+                            <span>🏢 {order.supplier || 'Proveedor General'}</span>
+                            <span className="text-xs text-emerald-400 font-mono bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                              Folio: {order.invoiceFolio}
+                            </span>
+                            <span className="text-[10px] bg-emerald-500 text-slate-950 px-2 py-0.5 rounded-full font-bold uppercase">
+                              RECIBIDA
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1">Fecha de recepción: {dateStr}</div>
+                        </div>
+                        <div className="text-sm font-bold text-emerald-400 font-mono">
+                          Total Pagado: ${order.totalAmount.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                      
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm text-slate-300">
+                          <thead className="text-xs uppercase bg-slate-900/60 text-slate-400 border-b border-slate-800">
+                            <tr>
+                              <th className="py-2.5 px-3 pl-4">Producto Ingresado</th>
+                              <th className="py-2.5 px-3 text-center">Cantidad Recibida</th>
+                              <th className="py-2.5 px-3 text-right">Costo Unit.</th>
+                              <th className="py-2.5 px-3 text-right pr-4">Subtotal</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/60">
+                            {order.items.map((item) => (
+                              <tr key={item.id} className="hover:bg-slate-900/30 transition">
+                                <td className="py-2.5 px-3 pl-4 font-medium text-white">{item.productName}</td>
+                                <td className="py-2.5 px-3 text-center font-mono text-slate-400">{item.quantity} pzas</td>
+                                <td className="py-2.5 px-3 text-right font-mono">${item.unitCost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
+                                <td className="py-2.5 px-3 text-right pr-4 font-mono text-white font-bold">${item.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   );
                 })}
