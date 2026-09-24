@@ -12,6 +12,8 @@
     "electron:build": "next build --webpack && electron-builder"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.12",
     "next": "16.3.1",
     "next-pwa": "^5.6.0",
     "react": "19.2.8",
@@ -23,6 +25,7 @@
   "devDependencies": {
     "@prisma/client": "^6.19.3",
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

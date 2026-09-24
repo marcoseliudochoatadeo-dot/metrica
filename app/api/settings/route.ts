@@ -1,48 +1,47 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
+// GET: Obtener la configuración general (appName y backgroundImage)
 export async function GET() {
   try {
-    let setting = await prisma.systemSetting.findUnique({
-      where: { id: 'config' },
-    });
-
-    if (!setting) {
-      setting = await prisma.systemSetting.create({
-        data: {
-          id: 'config',
-          appName: 'Altezza Cocina Italiana',
-          backgroundImage: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?q=80&w=2000&auto=format&fit=crop',
-        },
-      });
-    }
-
-    return NextResponse.json(setting);
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const setting = await prisma.systemSetting.findFirst();
+    return NextResponse.json(setting || {});
+  } catch (error) {
+    console.error('Error al obtener configuración:', error);
+    return NextResponse.json({}, { status: 200 });
   }
 }
 
+// POST: Guardar o actualizar la configuración general
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { appName, backgroundImage } = body;
 
-    const updated = await prisma.systemSetting.upsert({
-      where: { id: 'config' },
-      update: {
-        appName: appName || 'Altezza Cocina Italiana',
-        backgroundImage: backgroundImage || '',
-      },
-      create: {
-        id: 'config',
-        appName: appName || 'Altezza Cocina Italiana',
-        backgroundImage: backgroundImage || '',
-      },
-    });
+    const existing = await prisma.systemSetting.findFirst();
 
-    return NextResponse.json({ success: true, setting: updated });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (existing) {
+      await prisma.systemSetting.update({
+        where: { id: existing.id },
+        data: {
+          appName: appName || '',
+          backgroundImage: backgroundImage || '',
+        },
+      });
+    } else {
+      await prisma.systemSetting.create({
+        data: {
+          appName: appName || '',
+          backgroundImage: backgroundImage || '',
+        },
+      });
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error al guardar configuración:', error);
+    return NextResponse.json({ error: 'Error al guardar' }, { status: 500 });
   }
 }

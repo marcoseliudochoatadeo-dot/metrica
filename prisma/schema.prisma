@@ -183,3 +183,18 @@ model RequisitionItem {
   quantityRequested  Float
   quantityDelivered  Float?           @default(0)
 }
+
+// ==========================================
+// USUARIOS Y SEGURIDAD
+// ==========================================
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  password     String   // Aquí guardaremos la contraseña encriptada
+  role         String   @default("STAFF") // "ADMIN" o "STAFF"
+  roleLabel    String   @default("Empleado") // Etiqueta personalizada (ej. "Jefe de Barra", "Mixólogo")
+  permissions  String   @default("{}") // Guardará un JSON con los permisos en formato texto
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}

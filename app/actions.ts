@@ -1141,3 +1141,122 @@ export async function registerWarehouseAdjustment(productId: string, adjustmentQ
     return { success: false, error: error.message || 'Error al procesar el ajuste' };
   }
 }
+
+// ==========================================
+// SEGURIDAD Y SESIONES (LOGIN / REGISTRO)
+// ==========================================
+import { hash, compare } from 'bcryptjs';
+import { SignJWT } from 'jose';
+import { cookies } from 'next/headers';
+
+// Llave secreta para firmar las sesiones (en producción debería venir de tu .env)
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'altezza_secreto_metrica_2026_super_seguro');
+
+export async function registerUser(name: string, email: string, passwordRaw: string) {
+  try {
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return { success: false, error: 'Este correo ya está registrado.' };
+    }
+
+    // 1. Encriptar la contraseña (NUNCA guardar en texto plano)
+    const hashedPassword = await hash(passwordRaw, 10);
+
+    // 2. Si es el primer usuario, lo hacemos ADMIN, los demás STAFF
+    const totalUsers = await prisma.user.count();
+    const role = totalUsers === 0 ? 'ADMIN' : 'STAFF';
+
+    // 3. Crear el usuario en la BD
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role,
+      },
+    });
+
+    return { success: true, message: 'Usuario creado con éxito. Ahora inicia sesión.' };
+  } catch (error: any) {
+    console.error('Error en registro:', error);
+    return { success: false, error: 'Error al registrar el usuario.' };
+  }
+}
+
+export async function loginUser(email: string, passwordRaw: string) {
+  try {
+    // 1. Buscar al usuario
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return { success: false, error: 'Credenciales incorrectas.' };
+    }
+
+    // 2. Comparar contraseñas
+    const isValid = await compare(passwordRaw, user.password);
+    if (!isValid) {
+      return { success: false, error: 'Credenciales incorrectas.' };
+    }
+
+    // 3. Crear el "Gafete VIP" (Token JWT)
+    const token = await new SignJWT({ id: user.id, name: user.name, role: user.role })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('12h') // La sesión dura 12 horas
+      .sign(JWT_SECRET);
+
+    // 4. Guardar la cookie en el navegador
+    // LO QUE DEBES PONER:
+const cookieStore = await cookies();
+cookieStore.set('auth_token', token, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 60 * 60 * 24 * 7, // 1 semana
+  path: '/',
+});
+
+    return { success: true, message: `Bienvenido de vuelta, ${user.name}` };
+  } catch (error: any) {
+    console.error('Error en login:', error);
+    return { success: false, error: 'Error al iniciar sesión.' };
+  }
+}
+
+// LO QUE DEBES PONER:
+export async function logoutUser() {
+  const cookieStore = await cookies();
+  cookieStore.delete('auth_token');
+  return { success: true };
+}
+
+export async function updateUserPermissions(formData: FormData) {
+  const userId = formData.get('userId') as string;
+  const roleLabel = formData.get('roleLabel') as string;
+  const isAdmin = formData.get('isAdmin') === 'on';
+
+  // Recopilar los permisos del formulario
+  const permissions = {
+    inventory: formData.get('perm_inventory') === 'on',
+    supplies_purchases: formData.get('perm_supplies') === 'on',
+    recipes: formData.get('perm_recipes') === 'on',
+    waste_sales: formData.get('perm_sales') === 'on',
+    settings: formData.get('perm_settings') === 'on',
+  };
+
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        roleLabel: roleLabel || 'Empleado',
+        isAdmin: isAdmin,
+        permissions: JSON.stringify(permissions),
+      },
+    });
+
+    revalidatePath('/settings');
+    return { success: true };
+  } catch (error) {
+    console.error('Error al actualizar permisos:', error);
+    return { success: false, error: 'No se pudo actualizar el usuario' };
+  }
+}
