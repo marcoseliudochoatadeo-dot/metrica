@@ -1022,53 +1022,67 @@ export async function getPendingRequisitions() {
   }
 }
 
-export async function confirmRequisitionOrder(orderId: string, deliveredItems: { itemId: string; quantityDelivered: number }[]) {
+export async function confirmRequisitionOrder(orderId: string, receivedItems: { itemId: string; quantityDelivered: number }[]) {
   try {
-    await prisma.$transaction(async (tx) => {
-      // 1. Cambiar el estado de la orden a COMPLETED
-      await tx.requisitionOrder.update({
-        where: { id: orderId },
-        data: { status: 'COMPLETED' },
-      });
-
-      for (const item of deliveredItems) {
-        // Actualizar la cantidad entregada en el ítem de la requisición
-        await tx.requisitionItem.update({
-          where: { id: item.itemId },
-          data: { quantityDelivered: item.quantityDelivered },
-        });
-
-        // Buscar el ítem con su producto asociado
-        const reqItem = await tx.requisitionItem.findUnique({
-          where: { id: item.itemId },
-          include: { product: true },
-        });
-
-        if (reqItem && reqItem.product) {
-          const qtyDelivered = Number(item.quantityDelivered || 0);
-          
-          const currentBarStock = Number(reqItem.product.stockClosed || 0);
-          const currentWarehouseStock = Number(reqItem.product.warehouseStock || 0);
-
-          // 2. Actualizar: Sumar a Barra (stockClosed) y RESTAR de Almacén (warehouseStock)
-          await tx.product.update({
-            where: { id: reqItem.productId },
-            data: { 
-              stockClosed: currentBarStock + qtyDelivered,
-              warehouseStock: Math.max(0, currentWarehouseStock - qtyDelivered),
-            },
-          });
-        }
-      }
+    // 1. Obtener la orden de requisición con sus elementos y productos
+    const order = await prisma.requisitionOrder.findUnique({
+      where: { id: orderId },
+      include: { items: { include: { product: true } } },
     });
 
-    revalidatePath('/requisitions');
-    revalidatePath('/inventory');
-    revalidatePath('/warehouse');
-    return { success: true, message: 'Requisición confirmada e inventario actualizado con éxito.' };
+    if (!order) {
+      return { success: false, error: 'La orden de requisición no fue encontrada.' };
+    }
+
+    if (order.status === 'COMPLETED') {
+      return { success: false, error: 'Esta orden ya fue surtida previamente.' };
+    }
+
+    // 2. Procesar cada ítem de forma secuencial sin transacciones bloqueantes
+    for (const received of receivedItems) {
+      const orderItem = order.items.find((i) => i.id === received.itemId);
+      if (!orderItem) continue;
+
+      const qtyDelivered = Number(received.quantityDelivered) || 0;
+      if (qtyDelivered <= 0) continue;
+
+      const productId = orderItem.productId;
+      const product = orderItem.product;
+      if (!product) continue;
+
+      // Actualizar la cantidad entregada en el item
+      await prisma.requisitionItem.update({
+        where: { id: orderItem.id },
+        data: { quantityDelivered: qtyDelivered },
+      });
+
+      // Calcular nuevo stock
+      const currentWarehouseStock = Number(product.warehouseStock) || 0;
+      const newWarehouseStock = Math.max(0, currentWarehouseStock - qtyDelivered);
+
+      const currentBarStock = Number(product.stockClosed) || 0;
+      const newBarStock = currentBarStock + qtyDelivered;
+
+      // Actualizar el producto individualmente
+      await prisma.product.update({
+        where: { id: productId },
+        data: {
+          warehouseStock: newWarehouseStock,
+          stockClosed: newBarStock,
+        },
+      });
+    }
+
+    // 3. Marcar la orden como completada
+    await prisma.requisitionOrder.update({
+      where: { id: orderId },
+      data: { status: 'COMPLETED' },
+    });
+
+    return { success: true, message: '¡Requisición surtida y stock actualizado con éxito!' };
   } catch (error: any) {
     console.error('Error al confirmar requisición:', error);
-    return { success: false, error: error.message || 'Error al procesar la entrega' };
+    return { success: false, error: error.message || 'Error al procesar la entrega en el servidor.' };
   }
 }
 // ==========================================
