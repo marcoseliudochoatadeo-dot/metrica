@@ -459,39 +459,46 @@ export default function RequisitionsClient({
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {Object.entries(requisitionCart).map(([id, qty]) => {
-                      const prod = products.find((p) => p.id === id);
-                      if (!prod) return null;
-                      const whStock = Number(prod.warehouseStock) || 0;
-                      return (
-                        <tr key={id} className="hover:bg-slate-800/50 transition">
-                          <td className="py-3 px-4 pl-6 font-medium text-white">{prod.name}</td>
-                          <td className="py-3 px-4 text-center font-mono text-amber-400">{whStock} pzas</td>
-                          <td className="py-3 px-4 text-center font-mono text-xs">{getProductStockText(prod)}</td>
-                          <td className="py-3 px-4 text-center font-mono">
-                            <input
-                              type="number"
-                              min="1"
-                              max={whStock}
-                              value={qty}
-                              onChange={(e) => {
-                                const newQty = parseInt(e.target.value) || 1;
-                                setRequisitionCart((prev) => ({ ...prev, [id]: Math.min(newQty, whStock) }));
-                              }}
-                              className="w-20 bg-slate-950 border border-slate-800 rounded p-1 text-center text-white text-xs outline-none focus:border-amber-500"
-                            />
-                          </td>
-                          <td className="py-3 px-4 text-center pr-6">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(id)}
-                              className="text-rose-400 hover:text-rose-300 font-bold text-xs cursor-pointer"
-                            >
-                              Quitar
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+  const prod = products.find((p) => p.id === id);
+  if (!prod) return null;
+  const whStock = Number(prod.warehouseStock) || 0;
+  
+  // Detectar la unidad correcta según la categoría o método
+  const catLower = (prod.category || '').toLowerCase();
+  const isWeightOrMl = catLower.includes('frutas') || catLower.includes('verduras') || catLower.includes('preparaciones') || catLower.includes('jarabes') || catLower.includes('abarrotes');
+  const unitLabel = isWeightOrMl ? (prod.capacity === 1 ? 'pza' : 'g/ml') : 'pzas';
+
+  return (
+    <tr key={id} className="hover:bg-slate-800/50 transition">
+      <td className="py-3 px-4 pl-6 font-medium text-white">{prod.name}</td>
+      <td className="py-3 px-4 text-center font-mono text-amber-400">{whStock} {unitLabel}</td>
+      <td className="py-3 px-4 text-center font-mono text-xs">{getProductStockText(prod)}</td>
+      <td className="py-3 px-4 text-center font-mono flex items-center justify-center gap-1.5">
+        <input
+          type="number"
+          min="1"
+          max={whStock}
+          value={qty}
+          onChange={(e) => {
+            const newQty = parseInt(e.target.value) || 1;
+            setRequisitionCart((prev) => ({ ...prev, [id]: Math.min(newQty, whStock) }));
+          }}
+          className="w-20 bg-slate-950 border border-slate-800 rounded p-1 text-center text-white text-xs outline-none focus:border-amber-500 font-mono"
+        />
+        <span className="text-xs text-slate-400">{unitLabel}</span>
+      </td>
+      <td className="py-3 px-4 text-center pr-6">
+        <button
+          type="button"
+          onClick={() => handleRemoveItem(id)}
+          className="text-rose-400 hover:text-rose-300 font-bold text-xs cursor-pointer"
+        >
+          Quitar
+        </button>
+      </td>
+    </tr>
+  );
+})}
                   </tbody>
                 </table>
               )}
