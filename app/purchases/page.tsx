@@ -10,14 +10,14 @@ export default async function PurchasesPage() {
   const resProducts = await getProducts();
   const products = resProducts.success ? resProducts.data : [];
 
-  // 2. Obtener lista de proveedores únicos
-  const supplierRows = await prisma.purchaseOrder.findMany({
-    select: { supplier: true },
-    distinct: ['supplier'],
+  // 2. Obtener la lista completa de proveedores desde la tabla Supplier
+  const supplierRows = await prisma.supplier.findMany({
+    select: { name: true },
+    orderBy: { name: 'asc' },
   });
   const existingSuppliers = supplierRows
-    .map((r) => r.supplier)
-    .filter((s) => s.trim() !== '');
+    .map((r) => r.name)
+    .filter((s) => s && s.trim() !== '');
 
   // 3. Obtener órdenes PENDIENTES
   const pendingOrders = await prisma.purchaseOrder.findMany({

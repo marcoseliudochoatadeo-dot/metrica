@@ -16,6 +16,11 @@ interface ProductItem {
   supplier?: string;
 }
 
+interface SupplierItem {
+  id: string;
+  name: string;
+}
+
 interface PurchaseItem {
   productId: string;
   productName: string;
@@ -53,7 +58,7 @@ export default function PurchasesClient({
   historyOrders = [],
 }: {
   products: ProductItem[];
-  existingSuppliers: string[];
+  existingSuppliers: (string | SupplierItem)[];
   pendingOrders: PurchaseOrderDB[];
   historyOrders?: PurchaseOrderDB[];
 }) {
@@ -73,6 +78,9 @@ export default function PurchasesClient({
   const [receivingOrderId, setReceivingOrderId] = useState<string | null>(null);
   const [checkedItems, setCheckedItems] = useState<{ [key: string]: boolean }>({});
   const [receivedQuantities, setReceivedQuantities] = useState<{ [key: string]: number }>({});
+
+  // Normalizar proveedores para que acepten tanto strings como objetos con ID/Name
+  const normalizedSuppliers = existingSuppliers.map((s) => (typeof s === 'string' ? s : s.name)).filter(Boolean);
 
   const filteredProducts = products.filter((p) => {
     if (!searchTerm || searchTerm.trim() === '') return true;
@@ -345,7 +353,7 @@ export default function PurchasesClient({
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white outline-none focus:border-amber-500"
                 />
                 <datalist id="suppliers-list">
-                  {existingSuppliers.map((sup) => (
+                  {normalizedSuppliers.map((sup) => (
                     <option key={sup} value={sup} />
                   ))}
                 </datalist>

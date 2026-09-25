@@ -24,7 +24,7 @@ interface ProductItem {
 }
 
 interface RequisitionItem {
-  id: string; // ID del renglón (RequisitionItem) necesario para confirmar entregas
+  id: string;
   productId: string;
   quantityRequested: number;
   quantityDelivered?: number;
@@ -40,15 +40,18 @@ interface RequisitionOrder {
 
 export default function RequisitionsClient({ 
   products = [], 
+  existingSuppliers = [],
   pendingOrders = [], 
   completedOrders = [] 
 }: { 
   products: ProductItem[];
+  existingSuppliers: string[];
   pendingOrders: RequisitionOrder[];
   completedOrders: RequisitionOrder[];
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'nuevo' | 'standby' | 'historial'>('nuevo');
+  const [supplier, setSupplier] = useState(''); // <--- Nuevo estado para el proveedor
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProductName, setSelectedProductName] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -56,7 +59,6 @@ export default function RequisitionsClient({
   const [requisitionCart, setRequisitionCart] = useState<{ [key: string]: number }>({});
   const [loading, setLoading] = useState(false);
 
-  // Estado para la orden en Standby que se está revisando/surtiendo
   const [activeOrderToReview, setActiveOrderToReview] = useState<RequisitionOrder | null>(null);
   const [deliveryQuantities, setDeliveryQuantities] = useState<{ [key: string]: number }>({});
 
@@ -217,7 +219,6 @@ export default function RequisitionsClient({
     link.click();
   };
 
-  // Crear Orden en Standby usando Server Action
   const handleSaveToStandby = async () => {
     const itemsToSubmit = Object.entries(requisitionCart)
       .filter(([_, qty]) => qty > 0)
@@ -235,6 +236,7 @@ export default function RequisitionsClient({
 
       alert('Requisición guardada en Standby correctamente.');
       setRequisitionCart({});
+      setSupplier('');
       setActiveTab('standby');
       router.refresh();
     } catch (err: any) {
@@ -244,7 +246,6 @@ export default function RequisitionsClient({
     }
   };
 
-  // Abrir modal de revisión para surtir orden en standby
   const handleOpenReviewModal = (order: RequisitionOrder) => {
     setActiveOrderToReview(order);
     const initialDelivered: { [key: string]: number } = {};
@@ -254,7 +255,6 @@ export default function RequisitionsClient({
     setDeliveryQuantities(initialDelivered);
   };
 
-  // Confirmar entrega y traspaso a barra usando Server Action
   const handleConfirmDelivery = async () => {
     if (!activeOrderToReview) return;
 
@@ -284,7 +284,6 @@ export default function RequisitionsClient({
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto font-sans text-slate-100">
-      {/* Cabecera */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -310,7 +309,6 @@ export default function RequisitionsClient({
         </div>
       </div>
 
-      {/* Navegación por Pestañas */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
         <button
           type="button"
@@ -346,9 +344,30 @@ export default function RequisitionsClient({
         </button>
       </div>
 
-      {/* PESTAÑA 1: NUEVA REQUISICIÓN */}
       {activeTab === 'nuevo' && (
         <div className="space-y-6">
+          {/* SECCIÓN DE PROVEEDOR OPCIONAL EN REQUISICIÓN */}
+          <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
+            <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
+              🏢 Proveedor / Distribuidor Relacionado (Opcional)
+            </h2>
+            <div className="w-full sm:w-1/2">
+              <input
+                list="suppliers-req-list"
+                type="text"
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+                placeholder="Selecciona o busca proveedor..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white outline-none focus:border-amber-500"
+              />
+              <datalist id="suppliers-req-list">
+                {existingSuppliers.map((sup) => (
+                  <option key={sup} value={sup} />
+                ))}
+              </datalist>
+            </div>
+          </section>
+
           <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
@@ -494,7 +513,6 @@ export default function RequisitionsClient({
         </div>
       )}
 
-      {/* PESTAÑA 2: ÓRDENES EN STANDBY */}
       {activeTab === 'standby' && (
         <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl p-5 space-y-4">
           <h2 className="text-sm font-semibold text-white">⏳ Requisiciones Pendientes de Surtir</h2>
@@ -523,7 +541,6 @@ export default function RequisitionsClient({
         </section>
       )}
 
-      {/* PESTAÑA 3: HISTORIAL DE ENTRADAS */}
       {activeTab === 'historial' && (
         <section className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl p-5 space-y-4">
           <h2 className="text-sm font-semibold text-white">📊 Historial de Traspasos Completados (Entradas a Barra)</h2>
@@ -552,7 +569,6 @@ export default function RequisitionsClient({
         </section>
       )}
 
-      {/* MODAL DE REVISIÓN Y CONFIRMACIÓN DE ENTREGA */}
       {activeOrderToReview && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-2xl">

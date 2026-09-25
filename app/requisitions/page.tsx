@@ -8,6 +8,15 @@ export default async function RequisitionsPage() {
     orderBy: { name: 'asc' },
   });
 
+  // Obtener la lista completa de proveedores desde la tabla Supplier
+  const supplierRows = await prisma.supplier.findMany({
+    select: { name: true },
+    orderBy: { name: 'asc' },
+  });
+  const existingSuppliers = supplierRows
+    .map((r) => r.name)
+    .filter((s) => s && s.trim() !== '');
+
   const pendingOrders = await prisma.requisitionOrder.findMany({
     where: { status: 'PENDING' },
     include: { items: { include: { product: true } } },
@@ -24,6 +33,7 @@ export default async function RequisitionsPage() {
   return (
     <RequisitionsClient 
       products={products} 
+      existingSuppliers={existingSuppliers} 
       pendingOrders={pendingOrders} 
       completedOrders={completedOrders} 
     />
