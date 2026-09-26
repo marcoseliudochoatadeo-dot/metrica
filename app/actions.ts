@@ -1274,3 +1274,63 @@ export async function updateUserPermissions(formData: FormData) {
     return { success: false, error: 'No se pudo actualizar el usuario' };
   }
 }
+
+// Crear una nueva tarea de checklist (Check-In o Check-Out)
+export async function createChecklistTask(type: 'CHECK_IN' | 'CHECK_OUT', title: string, dayOfWeek?: string) {
+  try {
+    if (!title || title.trim() === '') {
+      return { success: false, error: 'El título de la tarea es obligatorio.' };
+    }
+
+    await prisma.checklistTask.create({
+      data: {
+        type,
+        title: title.trim().toUpperCase(),
+        dayOfWeek: dayOfWeek ? dayOfWeek.toUpperCase() : null,
+        isActive: true,
+      },
+    });
+
+    revalidatePath('/operations');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error al crear tarea:', error);
+    return { success: false, error: error.message || 'Error al guardar la tarea.' };
+  }
+}
+
+// Eliminar o desactivar una tarea
+export async function deleteChecklistTask(id: string) {
+  try {
+    await prisma.checklistTask.delete({
+      where: { id },
+    });
+
+    revalidatePath('/operations');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error al eliminar tarea:', error);
+    return { success: false, error: error.message || 'Error al eliminar la tarea.' };
+  }
+}
+
+// Registrar una merma o incidencia
+export async function createBarIncident(data: { type: string; description: string; quantity: number; cost?: number; responsible?: string }) {
+  try {
+    await prisma.barIncident.create({
+      data: {
+        type: data.type,
+        description: data.description,
+        quantity: Number(data.quantity) || 1,
+        cost: Number(data.cost) || 0,
+        responsible: data.responsible || 'General',
+      },
+    });
+
+    revalidatePath('/operations');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error al registrar incidencia:', error);
+    return { success: false, error: error.message || 'Error al registrar.' };
+  }
+}

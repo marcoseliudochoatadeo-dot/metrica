@@ -199,17 +199,14 @@ model User {
   updatedAt    DateTime @updatedAt
 }
 
-// --- MÓDULO DE OPERACIONES Y CHECKLISTS ---
-
 model ChecklistTask {
-  id          String   @id @default(uuid())
-  type        String   // 'CHECK_IN' o 'CHECK_OUT'
-  title       String   // Nombre de la tarea (ej: "MONTAJE DE CAFETERA")
-  dayOfWeek   String?  // 'LUNES', 'MARTES', etc. (o null si aplica todos los días)
-  isActive    Boolean  @default(true)
-  order       Int      @default(0)
-  createdAt   DateTime @default(now())
-  
+  id          String         @id @default(uuid())
+  type        String         // 'CHECK_IN' o 'CHECK_OUT'
+  title       String         
+  dayOfWeek   String?        
+  isActive    Boolean        @default(true)
+  order       Int            @default(0)
+  createdAt   DateTime       @default(now())
   logs        ChecklistLog[]
 }
 
@@ -217,10 +214,10 @@ model ChecklistLog {
   id          String        @id @default(uuid())
   taskId      String
   task        ChecklistTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  date        DateTime      @default(now()) // Fecha del turno
+  date        DateTime      @default(now())
   completed   Boolean       @default(false)
-  responsible String?       // Nombre del bartender (ej: "Pablo", "Owen")
-  imageUrl    String?       // URL de la foto de evidencia
+  responsible String?       
+  imageUrl    String?       
   notes       String?
   createdAt   DateTime      @default(now())
 }
@@ -234,8 +231,3 @@ model BarIncident {
   responsible String?
   createdAt   DateTime @default(now())
 }
-
-// Ampliación para el Recetario (Soporte de video y multimedia)
-// Nota: Si ya tienes un modelo Recipe, asegúrate de agregarle estos campos:
-// videoUrl    String?
-// photoUrl    String?
