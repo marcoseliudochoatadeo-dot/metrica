@@ -21,7 +21,7 @@ export default function SalesPageClient({
   const [selectedDate, setSelectedDate] = useState('');
   const [isPending, startTransition] = useTransition();
   
-  // NUEVO: Estado para llevar el control de las ventas seleccionadas
+  // Estado para llevar el control de las ventas seleccionadas
   const [selectedSales, setSelectedSales] = useState<string[]>([]);
 
   const filteredSales = pendingSales.filter((sale: any) => {
@@ -53,7 +53,7 @@ export default function SalesPageClient({
     });
   };
 
-  // NUEVO: Lógica para borrar múltiples ventas a la vez
+  // Lógica para borrar múltiples ventas a la vez
   const handleBulkDelete = () => {
     if (!confirm(`¿Estás seguro de eliminar las ${selectedSales.length} ventas seleccionadas? Todo el stock se reintegrará automáticamente.`)) {
       return;
@@ -74,7 +74,7 @@ export default function SalesPageClient({
     });
   };
 
-  // NUEVO: Seleccionar o deseleccionar todas las filas
+  // Seleccionar o deseleccionar todas las filas
   const toggleSelectAll = () => {
     if (selectedSales.length === filteredSales.length) {
       setSelectedSales([]);
@@ -83,7 +83,7 @@ export default function SalesPageClient({
     }
   };
 
-  // NUEVO: Seleccionar o deseleccionar una fila individual
+  // Seleccionar o deseleccionar una fila individual
   const toggleSelect = (id: string) => {
     if (selectedSales.includes(id)) {
       setSelectedSales(selectedSales.filter(saleId => saleId !== id));
@@ -128,7 +128,7 @@ export default function SalesPageClient({
           </div>
 
           <div className="flex items-center gap-4">
-            {/* BOTÓN DE BORRADO MASIVO (Aparece solo si hay seleccionados) */}
+            {/* BOTÓN DE BORRADO MASIVO */}
             {selectedSales.length > 0 && (
               <button
                 onClick={handleBulkDelete}
@@ -219,9 +219,18 @@ export default function SalesPageClient({
                           {sale.saleMode || 'RECETA'}
                         </span>
                       </td>
+                      
+                      {/* AQUÍ ESTÁ LA LÓGICA DE TEXTO CORREGIDA */}
                       <td className="py-3 px-4 text-center font-mono text-xs text-slate-300">
-                        {sale.quantity} <span className="text-slate-500">{sale.saleMode === 'BOTELLA' || sale.saleMode === 'RECETA' || sale.saleMode === 'PIEZA' ? 'pza(s)' : 'ml'}</span>
+                        {sale.saleMode === 'COPEO' 
+                          ? `${sale.quantity} Copa / Trago` 
+                          : sale.saleMode === 'BOTELLA' 
+                          ? `${sale.quantity} Botella(s)` 
+                          : sale.saleMode === 'PIEZA' 
+                          ? `${sale.quantity} pza(s)` 
+                          : `${sale.quantity} pza(s)`}
                       </td>
+                      
                       <td className="py-3 px-4 text-right font-mono text-xs font-bold text-rose-400">
                         ${itemCost.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>

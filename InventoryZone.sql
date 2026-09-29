@@ -1,0 +1,6 @@
+COPY public."InventoryZone" (id, name, "orderIndex", "createdAt") FROM stdin;
+abb291bb-e63e-4ddf-b76e-57c24d5ca343	REFRI	0	2026-09-13 18:53:55.047
+6d1fda21-a07c-4633-ac36-d3669e9dfac5	CAVA	0	2026-09-13 19:03:50.303
+0333a666-776f-4f11-ac35-53f9037b35a3	CAJA	0	2026-09-13 19:03:53.008
+9bc6794a-14b4-4608-aa8b-7bae05edb294	CARRITO	0	2026-09-14 18:16:43.21
+\.

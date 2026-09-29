@@ -4,9 +4,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://postgres:8hFF3K56m1OnhDWb@db.epozwiakwvlebxxtjdzc.supabase.co:5432/postgres"
+  url      = "postgresql://postgres:uJqgKb7vYmVQ8x4x@db.epozwiakwvlebxxtjdzc.supabase.co:5432/postgres?sslmode=require"
 }
-
 // ... tus otros modelos y configuración ...
 
 model Product {

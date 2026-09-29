@@ -120,12 +120,10 @@ export async function createProduct(data: any) {
   try {
     const cleanName = String(data.name).trim();
 
-    // CANDADO 1: Obtenemos los nombres actuales para verificar duplicados
     const existingProducts = await prisma.product.findMany({
       select: { name: true }
     });
     
-    // Comprobamos si el nombre ya existe (ignorando mayúsculas/minúsculas)
     const alreadyExists = existingProducts.some(
       (p) => p.name.toLowerCase() === cleanName.toLowerCase()
     );
@@ -147,8 +145,8 @@ export async function createProduct(data: any) {
         costPrice: parseFloat(data.costPrice) || 0,
         salePrice: parseFloat(data.salePrice) || 0,
         glassPrice: parseFloat(data.glassPrice) || 0,
-        minStock: parseFloat(data.minStock) || 1, // <-- AGREGADO
-        maxStock: parseFloat(data.maxStock) || 10, // <-- AGREGADO
+        minStock: parseFloat(data.minStock) || 1, 
+        maxStock: parseFloat(data.maxStock) || 10, 
         supplier: data.supplier || '',
         measurementMethod: data.measurementMethod || 'SCALE',
       },
@@ -177,8 +175,8 @@ export async function updateProduct(id: string, data: any) {
         costPrice: parseFloat(data.costPrice) || 0,
         salePrice: parseFloat(data.salePrice) || 0,
         glassPrice: parseFloat(data.glassPrice) || 0,
-        minStock: parseFloat(data.minStock) || 1, // <-- AGREGADO
-        maxStock: parseFloat(data.maxStock) || 10, // <-- AGREGADO
+        minStock: parseFloat(data.minStock) || 1, 
+        maxStock: parseFloat(data.maxStock) || 10, 
         supplier: data.supplier || '',
         measurementMethod: data.measurementMethod || 'SCALE',
       },
@@ -226,7 +224,7 @@ export async function getInventoryLogs() {
 }
 
 // ==========================================
-// GESTIÓN DE VENTAS Y DESCUENTO DE INVENTARIO
+// MOTOR CORREGIDO DE DESCUENTO DE INVENTARIO
 // ==========================================
 
 async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: number) {
@@ -247,7 +245,6 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
 
     let netOpenMl = 0;
 
-    // 1. OBTENER MILILITROS REALES SEGÚN EL MÉTODO DE MEDICIÓN
     if (method === 'PORTION') {
       netOpenMl = currentWeight * pCap;
     } else {
@@ -256,11 +253,9 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       }
     }
 
-    // 2. CALCULAR GLOBAL Y RESTAR
     let totalMlGlobal = (stockClosed * pCap) + netOpenMl;
     totalMlGlobal = totalMlGlobal - totalDeductionMl;
 
-    // 3. REDISTRIBUIR
     let newClosedUnits = 0;
     let remainderMl = 0;
 
@@ -272,7 +267,6 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       remainderMl = totalMlGlobal; 
     }
 
-    // 4. VOLVER A GUARDAR
     let newCurrentWeight = 0;
     if (method === 'PORTION') {
       newCurrentWeight = pCap > 0 ? remainderMl / pCap : 0;
@@ -296,47 +290,60 @@ async function applyInventoryDeduction(tx: any, product: any, totalDeductionMl: 
       where: { productId: product.id }
     });
 
-  } else {
-    // --- AQUÍ EMPIEZA LA MAGIA DEL TRADUCTOR DE UNIDADES ---
+  }  else {
+    // --- TRADUCTOR DE UNIDADES BLINDADO CONTRA RECETAS EN GRAMOS ---
     let currentStockClosed = Number(product.stockClosed || 0);
     let currentWeight = Number(product.currentWeight || 0);
     const capacity = Number(product.capacity || 1); 
     const unit = (product.unit || 'pz').toLowerCase();
 
-    // La cantidad que manda la receta (ej. 150 de limonada o 1 pza de café)
-    let deduction = totalDeductionMl; 
+    let deductionInCapacityUnits = totalDeductionMl; 
 
-    // 1. CONVERSIÓN INVISIBLE A LITROS O KILOS
-    if (unit === 'lt' || unit === 'kg') {
-      deduction = deduction / 1000; // Convierte 150 a 0.15
-    }
-
-    const isStrictPiece = [
-      'refresco', 'agua', 'coca', 'cafe', 'cápsula', 'capsula', 'lata', 'cerveza', 'jugo', 'mix', 'bebidas'
-    ].some((term) => catLower.includes(term) || (product.name || '').toLowerCase().includes(term));
-
-    // 2. APLICAR DESCUENTO CON EFECTO CASCADA (ABRIR BOTELLA AUTOMÁTICAMENTE)
-    if (unit === 'lt' || unit === 'kg') {
-      // Si la botella abierta no tiene suficiente líquido, abrimos una nueva
-      if (currentWeight < deduction && currentStockClosed > 0) {
-        currentStockClosed -= 1;          // Quitamos 1 botella del stock cerrado
-        currentWeight += capacity;        // "Servimos" toda la capacidad (ej. 2 lt) a la abierta
-      }
-      currentWeight = currentWeight - deduction; // Hacemos la resta matemática (ej. 2 - 0.15 = 1.85)
+    // 1. ESTANDARIZAR LA DEDUCCIÓN AL TIPO DE CAPACIDAD Y ESCALA DE RECETA
+    if (['lt', 'l', 'litro', 'litros'].includes(unit)) {
+      deductionInCapacityUnits = totalDeductionMl / 1000;
     } 
-    else if (isStrictPiece && unit === 'pz') {
-      // Lógica para piezas enteras reales (Cápsulas de café, lata de coca, cerveza)
-      currentStockClosed = currentStockClosed - deduction; 
+    else if (['kg', 'kilo', 'kilos', 'g', 'gramos'].includes(unit)) {
+      // Si el insumo está en kg/g pero la receta descuenta en gramos masivos a través de subrecetas
+      if (totalDeductionMl > 50) {
+        deductionInCapacityUnits = totalDeductionMl / 1000;
+      } else {
+        deductionInCapacityUnits = totalDeductionMl;
+      }
+    }
+    else if (['pz', 'pza', 'pieza', 'piezas', 'lata'].includes(unit)) {
+      if (totalDeductionMl > 10 && capacity > 10) {
+        deductionInCapacityUnits = totalDeductionMl;
+      } else {
+        deductionInCapacityUnits = totalDeductionMl * capacity;
+      }
     } 
     else {
-      // Lógica para insumos dados de alta en "ml" o "g" puros (jarabes, pulpas)
-      currentWeight = currentWeight - deduction;
+      deductionInCapacityUnits = totalDeductionMl;
+      if (capacity === 1 && totalDeductionMl > 5) {
+        deductionInCapacityUnits = totalDeductionMl / 1000;
+      }
+    }
+
+    // 2. CASCADA UNIVERSAL (ABRIR BOTELLAS/PAQUETES AUTOMÁTICAMENTE)
+    while (currentWeight < deductionInCapacityUnits && currentStockClosed > 0) {
+      currentStockClosed -= 1;          
+      currentWeight += capacity;        
+    }
+
+    // Restamos la cantidad exacta normalizada
+    currentWeight = currentWeight - deductionInCapacityUnits;
+
+    // 3. CASCADA INVERSA (REEMPAQUETAR SI SOBREPASA LA CAPACIDAD EN DEVOLUCIONES)
+    while (currentWeight >= capacity && capacity > 0) {
+      currentWeight -= capacity;
+      currentStockClosed += 1;
     }
 
     await tx.product.update({
       where: { id: product.id },
       data: {
-        stockClosed: currentStockClosed,
+        stockClosed: Math.max(0, currentStockClosed),
         currentWeight: currentWeight,
       },
     });
@@ -369,7 +376,7 @@ export async function createSale(
 
         if (!recipe) throw new Error('Receta no encontrada');
 
-        // Costo unitario de preparar UNA sola receta
+        // Costo unitario corregido con protección de conversión de unidades
         const unitCost = recipe.items.reduce((acc: number, item: any) => {
           if (!item.product) return acc;
           const pCost = Number(item.product.costPrice || 0);
@@ -377,22 +384,20 @@ export async function createSale(
           const pUnit = (item.product.unit || 'ml').toLowerCase();
           const ingQty = Number(item.quantity || 0);
 
-          let costPerItemUnit = 0;
-
-          if (pUnit === 'kg' || pUnit === 'kilo') {
-            costPerItemUnit = (pCost / 1000) * ingQty;
-          } else if (pUnit === 'lt' || pUnit === 'lts' || pUnit === 'litros') {
-            costPerItemUnit = (pCost / 1000) * ingQty;
-          } else if (pCap > 1) {
-            costPerItemUnit = (pCost / pCap) * ingQty;
+          let deductionInCapUnits = ingQty;
+          if (['lt', 'l', 'litro', 'litros', 'kg', 'kilo', 'kilos'].includes(pUnit)) {
+            deductionInCapUnits = ingQty / 1000;
+          } else if (['pz', 'pza', 'pieza', 'piezas', 'lata'].includes(pUnit)) {
+            if (ingQty > 10 && pCap > 10) deductionInCapUnits = ingQty;
+            else deductionInCapUnits = ingQty * pCap;
           } else {
-            costPerItemUnit = pCost * ingQty;
+            if (pCap === 1 && ingQty > 5) deductionInCapUnits = ingQty / 1000;
           }
 
-          return acc + costPerItemUnit;
+          const fraction = pCap > 0 ? deductionInCapUnits / pCap : 0;
+          return acc + (fraction * pCost);
         }, 0);
 
-        // Guardamos el costo total y precio total de la venta de forma limpia
         const totalCost = unitCost * quantitySold;
         const baseUnitPrice = recipe.price || 0;
         const finalPrice = explicitSalePrice > 0 ? explicitSalePrice : baseUnitPrice * quantitySold;
@@ -435,10 +440,7 @@ export async function createSale(
           'mocktail', 'mixologia', 'mixología', 'cocteleria', 'coctelería'
         ].some((cat) => catLower.includes(cat));
 
-        
-
         if (isStrictPiece || saleMode === 'PIEZA') {
-          // VENTA POR PIEZA / LATA / BOTELLA CERRADA (Ej. Cervezas, Aguas)
           totalCost = pCost * quantitySold;
           modeToSave = 'PIEZA';
           const unitSalePrice = Number(product.salePrice || 0);
@@ -462,7 +464,6 @@ export async function createSale(
           });
 
         } else if (saleMode === 'BOTELLA') {
-          // VENTA DE BOTELLA ENTERA
           totalCost = pCost * quantitySold;
           const unitSalePrice = Number(product.salePrice || 0);
           finalPrice = explicitSalePrice > 0 ? explicitSalePrice : (unitSalePrice * quantitySold);
@@ -485,7 +486,6 @@ export async function createSale(
           });
 
         } else {
-          // VENTA POR COPEO (Licores y Vinos)
           const isWineOrEspumoso = [
             'vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'
           ].some((c) => catLower.includes(c));
@@ -582,11 +582,9 @@ export async function importProductsFromExcel(formData: FormData) {
       return { success: false, error: 'El archivo Excel está vacío o no tiene el formato correcto.' };
     }
 
-    // CANDADO 2: Cargamos nombres existentes de la Base de Datos
     const existingProductsDb = await prisma.product.findMany({
       select: { name: true }
     });
-    // Creamos un registro rápido de nombres en minúsculas para comparar
     const existingNames = new Set(existingProductsDb.map(p => p.name.toLowerCase().trim()));
 
     let importedCount = 0;
@@ -598,7 +596,6 @@ export async function importProductsFromExcel(formData: FormData) {
 
       const cleanName = String(rawName).trim();
 
-      // Si el producto ya existe, saltamos a la siguiente fila para no duplicar
       if (existingNames.has(cleanName.toLowerCase())) {
         skippedCount++;
         continue;
@@ -628,7 +625,6 @@ export async function importProductsFromExcel(formData: FormData) {
         },
       });
       
-      // Añadimos el recién creado al registro para que no se duplique si viene 2 veces en el mismo Excel
       existingNames.add(cleanName.toLowerCase());
       importedCount++;
     }
@@ -734,7 +730,6 @@ export async function exportInventoryToExcel() {
       let netMl = 0;
       let openRatio = 0;
 
-      // Misma lógica de cálculo proporcional que usas en el inventario visual
       if (p.openBottles && p.openBottles.length > 0) {
         if (p.measurementMethod === 'PORTION') {
           openRatio = p.openBottles.reduce((acc, b) => acc + (b.value || 0), 0);
@@ -749,17 +744,14 @@ export async function exportInventoryToExcel() {
         }
       }
 
-      // Equivalente total en unidades (ej: 1.5)
-      // Equivalente total en unidades (ej: 1.5)
       const totalUnitsEquivalent = stockClosed + openRatio;
-
       const totalValue = (stockClosed * cost) + (openRatio * cost);
 
       return {
         'Producto': p.name,
         'Categoría': p.category,
         'Subtipo / Región': p.subtype || 'N/D',
-        'Stock Total (Unidades)': Number(totalUnitsEquivalent.toFixed(2)), // <-- AQUÍ MUESTRA EL DECIMAL (Ej: 1.5)
+        'Stock Total (Unidades)': Number(totalUnitsEquivalent.toFixed(2)),
         'Capacidad (ml/g)': capacity,
         'Costo Unitario ($)': cost,
         'Valor Total ($)': Number(totalValue.toFixed(2)),
@@ -796,9 +788,6 @@ export async function updateLogReason(logId: string, reason: string) {
   }
 }
 
-// ==========================================
-// GESTIÓN DE ZONAS DINÁMICAS DE INVENTARIO
-// ==========================================
 export async function getInventoryZones() {
   try {
     const zones = await prisma.inventoryZone.findMany({
@@ -816,7 +805,6 @@ export async function createInventoryZone(name: string) {
     const newZone = await prisma.inventoryZone.create({
       data: { name: String(name).trim() }
     });
-    // Ajusta la ruta si tu página se llama diferente
     revalidatePath('/physical-count'); 
     return { success: true, data: JSON.parse(JSON.stringify(newZone)) };
   } catch (error: any) {
@@ -834,16 +822,11 @@ export async function deleteInventoryZone(id: string) {
   }
 }
 
-// ==========================================
-// MÓDULO DE PRODUCCIÓN (BATEO DE JARABES)
-// ==========================================
 export async function getProductionRecipes() {
   try {
-    // Traemos TODAS las recetas sin filtros restrictivos para que aparezcan pulpas, infusiones, jarabes, etc.
     const allRecipes = await prisma.recipe.findMany({
       include: { items: { include: { product: true } } }
     });
-
     return { success: true, data: JSON.parse(JSON.stringify(allRecipes)) };
   } catch (error) {
     return { success: false, error: 'Error al cargar recetas de producción' };
@@ -852,15 +835,14 @@ export async function getProductionRecipes() {
 
 export async function registerProduction(recipeId: string, batches: number) {
   try {
+    // 1. AHORA INCLUIMOS EL OBJETO 'product' COMPLETO EN LA RECETA
     const recipe = await prisma.recipe.findUnique({
       where: { id: recipeId },
-      include: { items: true }
+      include: { items: { include: { product: true } } } 
     });
     
     if (!recipe) throw new Error('Receta no encontrada');
 
-    // Buscar el producto en el inventario que corresponde a este jarabe
-    // (Busca si se llama igual, o si tiene el prefijo "[Subreceta]")
     const targetProduct = await prisma.product.findFirst({
       where: {
         OR: [
@@ -872,26 +854,46 @@ export async function registerProduction(recipeId: string, batches: number) {
       }
     });
 
-    // Ejecutamos todo en una transacción para que si algo falla, no se descuadre nada
     await prisma.$transaction(async (tx) => {
-      // 1. Sumar el rendimiento al jarabe final en el inventario
+      // 2. SUMAR AL INVENTARIO LO QUE FABRICAMOS (CON CASCADA HACIA ARRIBA)
       if (targetProduct) {
          const amountToAdd = recipe.yieldQuantity * batches;
+         
+         let currentWeight = Number(targetProduct.currentWeight || 0);
+         let stockClosed = Number(targetProduct.stockClosed || 0);
+         const capacity = Number(targetProduct.capacity || 1);
+
+         currentWeight += amountToAdd;
+
+         // Si lo fabricado supera la capacidad, lo sella automáticamente como unidad cerrada.
+         while (currentWeight >= capacity && capacity > 0) {
+           currentWeight -= capacity;
+           stockClosed += 1;
+         }
+
          await tx.product.update({
            where: { id: targetProduct.id },
-           data: { currentWeight: { increment: amountToAdd } }
+           data: { 
+             currentWeight: currentWeight,
+             stockClosed: stockClosed
+           }
          });
       }
 
-      // 2. Descontar las cantidades de los insumos utilizados (ej. Azúcar, Limón)
+      // 3. DESCONTAR LOS INGREDIENTES CON EL MOTOR INTELIGENTE DE CASCADA
       for (const item of recipe.items) {
-         const amountToDeduct = item.quantity * batches;
-         await tx.product.update({
-           where: { id: item.productId },
-           data: { currentWeight: { decrement: amountToDeduct } }
-         });
+         if (!item.product) continue;
+         const amountToDeduct = (item.quantity || 0) * batches;
+         
+         // Usamos el mismo traductor blindado que en las ventas:
+         await applyInventoryDeduction(tx, item.product, amountToDeduct);
       }
     });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    revalidatePath('/sales');
+    revalidatePath('/');
 
     return { success: true };
   } catch (error: any) {
@@ -914,20 +916,14 @@ export async function deleteSale(saleId: string) {
     throw new Error('La venta no existe.');
   }
 
-  // Metemos todo en una transacción para proteger la base de datos
   await prisma.$transaction(async (tx) => {
-    
-    // 1. REINTEGRAR INVENTARIO
     if (sale.recipeId && sale.recipe) {
-      // Es un Cóctel: Devolvemos los insumos usando la función matemática en negativo (para que sume y reempaquete)
       for (const item of sale.recipe.items) {
         if (!item.product) continue;
         const mlReturned = (item.quantity || 0) * sale.quantity;
-        // Mandamos el valor en negativo para invertir la deducción
         await applyInventoryDeduction(tx, item.product, -mlReturned);
       }
     } else if (sale.productId && sale.product) {
-      // Es un Producto Directo
       const catLower = (sale.product.category || '').toLowerCase();
       const isStrictPiece = [
         'mezclador', 'mezcladores', 'refresco', 'agua', 'cerveza', 'cafe', 'café', 'pieza',
@@ -935,14 +931,12 @@ export async function deleteSale(saleId: string) {
       ].some((cat) => catLower.includes(cat));
 
       if (isStrictPiece || sale.saleMode === 'PIEZA' || sale.saleMode === 'BOTELLA') {
-        // Si es pieza entera o botella cerrada, devolvemos la unidad directamente al stock cerrado
         const currentClosed = Number(sale.product.stockClosed || 0);
         await tx.product.update({
           where: { id: sale.productId },
           data: { stockClosed: currentClosed + sale.quantity },
         });
       } else {
-        // Es Copeo (Vinos / Licores)
         const isWineOrEspumoso = [
           'vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'
         ].some((c) => catLower.includes(c));
@@ -950,12 +944,10 @@ export async function deleteSale(saleId: string) {
         const mlPerPortion = isWineOrEspumoso ? 150 : 45; 
         const mlReturned = mlPerPortion * sale.quantity;
         
-        // Devolvemos los ml al stock abierto usando la función inversa
         await applyInventoryDeduction(tx, sale.product, -mlReturned);
       }
     }
 
-    // 2. ELIMINAR EL REGISTRO DE VENTA
     await tx.sale.delete({
       where: { id: saleId },
     });
@@ -967,10 +959,6 @@ export async function deleteSale(saleId: string) {
 
   return { success: true };
 }
-
-// ==========================================
-// MÓDULO DE REQUISICIONES / TRASPASOS
-// ==========================================
 
 export async function createRequisitionOrder(items: { productId: string; quantityRequested: number }[]) {
   try {
@@ -1024,7 +1012,6 @@ export async function getPendingRequisitions() {
 
 export async function confirmRequisitionOrder(orderId: string, receivedItems: { itemId: string; quantityDelivered: number }[]) {
   try {
-    // 1. Obtener la orden de requisición con sus elementos y productos
     const order = await prisma.requisitionOrder.findUnique({
       where: { id: orderId },
       include: { items: { include: { product: true } } },
@@ -1038,7 +1025,6 @@ export async function confirmRequisitionOrder(orderId: string, receivedItems: { 
       return { success: false, error: 'Esta orden ya fue surtida previamente.' };
     }
 
-    // 2. Procesar cada ítem de forma secuencial sin transacciones bloqueantes
     for (const received of receivedItems) {
       const orderItem = order.items.find((i) => i.id === received.itemId);
       if (!orderItem) continue;
@@ -1050,20 +1036,17 @@ export async function confirmRequisitionOrder(orderId: string, receivedItems: { 
       const product = orderItem.product;
       if (!product) continue;
 
-      // Actualizar la cantidad entregada en el item
       await prisma.requisitionItem.update({
         where: { id: orderItem.id },
         data: { quantityDelivered: qtyDelivered },
       });
 
-      // Calcular nuevo stock
       const currentWarehouseStock = Number(product.warehouseStock) || 0;
       const newWarehouseStock = Math.max(0, currentWarehouseStock - qtyDelivered);
 
       const currentBarStock = Number(product.stockClosed) || 0;
       const newBarStock = currentBarStock + qtyDelivered;
 
-      // Actualizar el producto individualmente
       await prisma.product.update({
         where: { id: productId },
         data: {
@@ -1073,7 +1056,6 @@ export async function confirmRequisitionOrder(orderId: string, receivedItems: { 
       });
     }
 
-    // 3. Marcar la orden como completada
     await prisma.requisitionOrder.update({
       where: { id: orderId },
       data: { status: 'COMPLETED' },
@@ -1085,22 +1067,13 @@ export async function confirmRequisitionOrder(orderId: string, receivedItems: { 
     return { success: false, error: error.message || 'Error al procesar la entrega en el servidor.' };
   }
 }
-// ==========================================
-// HISTORIAL DE COMPRAS
-// ==========================================
 
 export async function getPurchaseHistory() {
   try {
     const history = await prisma.purchaseOrder.findMany({
-      where: { 
-        status: 'RECEIVED' // Filtra solo las compras ya recibidas/aprobadas
-      },
-      include: {
-        items: true, // Trae el desglose de productos comprados
-      },
-      orderBy: {
-        createdAt: 'desc', // Las compras más recientes primero
-      },
+      where: { status: 'RECEIVED' },
+      include: { items: true },
+      orderBy: { createdAt: 'desc' },
     });
     return { success: true, data: JSON.parse(JSON.stringify(history)) };
   } catch (error: any) {
@@ -1108,10 +1081,6 @@ export async function getPurchaseHistory() {
     return { success: false, error: error.message || 'Error al cargar el historial' };
   }
 }
-
-// ==========================================
-// MERMAS Y AJUSTES DE ALMACÉN
-// ==========================================
 
 export async function registerWarehouseAdjustment(productId: string, adjustmentQty: number) {
   try {
@@ -1123,18 +1092,14 @@ export async function registerWarehouseAdjustment(productId: string, adjustmentQ
       if (!product) throw new Error("Producto no encontrado");
 
       const currentStock = Number(product.warehouseStock || 0);
-      
-      // adjustmentQty será negativo si es merma (ej. -2), o positivo si es sobrante (ej. +1)
       const newStock = Math.max(0, currentStock + adjustmentQty);
       const difference = newStock - currentStock;
 
-      // 1. Actualizar el stock en almacén
       await tx.product.update({
         where: { id: productId },
         data: { warehouseStock: newStock },
       });
 
-      // 2. Registrar en el historial de auditoría de almacén
       await tx.warehouseAuditLog.create({
         data: {
           productId: product.id,
@@ -1156,38 +1121,23 @@ export async function registerWarehouseAdjustment(productId: string, adjustmentQ
   }
 }
 
-// ==========================================
-// SEGURIDAD Y SESIONES (LOGIN / REGISTRO)
-// ==========================================
 import { hash, compare } from 'bcryptjs';
 import { SignJWT } from 'jose';
 import { cookies } from 'next/headers';
 
-// Llave secreta para firmar las sesiones (en producción debería venir de tu .env)
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET || 'altezza_secreto_metrica_2026_super_seguro');
 
 export async function registerUser(name: string, email: string, passwordRaw: string) {
   try {
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return { success: false, error: 'Este correo ya está registrado.' };
-    }
+    if (existingUser) return { success: false, error: 'Este correo ya está registrado.' };
 
-    // 1. Encriptar la contraseña (NUNCA guardar en texto plano)
     const hashedPassword = await hash(passwordRaw, 10);
-
-    // 2. Si es el primer usuario, lo hacemos ADMIN, los demás STAFF
     const totalUsers = await prisma.user.count();
     const role = totalUsers === 0 ? 'ADMIN' : 'STAFF';
 
-    // 3. Crear el usuario en la BD
-    const newUser = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        role,
-      },
+    await prisma.user.create({
+      data: { name, email, password: hashedPassword, role },
     });
 
     return { success: true, message: 'Usuario creado con éxito. Ahora inicia sesión.' };
@@ -1199,35 +1149,26 @@ export async function registerUser(name: string, email: string, passwordRaw: str
 
 export async function loginUser(email: string, passwordRaw: string) {
   try {
-    // 1. Buscar al usuario
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return { success: false, error: 'Credenciales incorrectas.' };
-    }
+    if (!user) return { success: false, error: 'Credenciales incorrectas.' };
 
-    // 2. Comparar contraseñas
     const isValid = await compare(passwordRaw, user.password);
-    if (!isValid) {
-      return { success: false, error: 'Credenciales incorrectas.' };
-    }
+    if (!isValid) return { success: false, error: 'Credenciales incorrectas.' };
 
-    // 3. Crear el "Gafete VIP" (Token JWT)
     const token = await new SignJWT({ id: user.id, name: user.name, role: user.role })
       .setProtectedHeader({ alg: 'HS256' })
       .setIssuedAt()
-      .setExpirationTime('12h') // La sesión dura 12 horas
+      .setExpirationTime('12h')
       .sign(JWT_SECRET);
 
-    // 4. Guardar la cookie en el navegador
-    // LO QUE DEBES PONER:
-const cookieStore = await cookies();
-cookieStore.set('auth_token', token, {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'strict',
-  maxAge: 60 * 60 * 24 * 7, // 1 semana
-  path: '/',
-});
+    const cookieStore = await cookies();
+    cookieStore.set('auth_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 60 * 60 * 24 * 7,
+      path: '/',
+    });
 
     return { success: true, message: `Bienvenido de vuelta, ${user.name}` };
   } catch (error: any) {
@@ -1236,7 +1177,6 @@ cookieStore.set('auth_token', token, {
   }
 }
 
-// LO QUE DEBES PONER:
 export async function logoutUser() {
   const cookieStore = await cookies();
   cookieStore.delete('auth_token');
@@ -1248,7 +1188,6 @@ export async function updateUserPermissions(formData: FormData) {
   const roleLabel = formData.get('roleLabel') as string;
   const isAdmin = formData.get('isAdmin') === 'on';
 
-  // Recopilar los permisos del formulario
   const permissions = {
     inventory: formData.get('perm_inventory') === 'on',
     supplies_purchases: formData.get('perm_supplies') === 'on',
@@ -1275,46 +1214,29 @@ export async function updateUserPermissions(formData: FormData) {
   }
 }
 
-// Crear una nueva tarea de checklist (Check-In o Check-Out)
 export async function createChecklistTask(type: 'CHECK_IN' | 'CHECK_OUT', title: string, dayOfWeek?: string) {
   try {
-    if (!title || title.trim() === '') {
-      return { success: false, error: 'El título de la tarea es obligatorio.' };
-    }
-
+    if (!title || title.trim() === '') return { success: false, error: 'El título es obligatorio.' };
     await prisma.checklistTask.create({
-      data: {
-        type,
-        title: title.trim().toUpperCase(),
-        dayOfWeek: dayOfWeek ? dayOfWeek.toUpperCase() : null,
-        isActive: true,
-      },
+      data: { type, title: title.trim().toUpperCase(), dayOfWeek: dayOfWeek ? dayOfWeek.toUpperCase() : null, isActive: true },
     });
-
     revalidatePath('/operations');
     return { success: true };
   } catch (error: any) {
-    console.error('Error al crear tarea:', error);
     return { success: false, error: error.message || 'Error al guardar la tarea.' };
   }
 }
 
-// Eliminar o desactivar una tarea
 export async function deleteChecklistTask(id: string) {
   try {
-    await prisma.checklistTask.delete({
-      where: { id },
-    });
-
+    await prisma.checklistTask.delete({ where: { id } });
     revalidatePath('/operations');
     return { success: true };
   } catch (error: any) {
-    console.error('Error al eliminar tarea:', error);
-    return { success: false, error: error.message || 'Error al eliminar la tarea.' };
+    return { success: false, error: error.message };
   }
 }
 
-// Registrar una merma o incidencia
 export async function createBarIncident(data: { type: string; description: string; quantity: number; cost?: number; responsible?: string }) {
   try {
     await prisma.barIncident.create({
@@ -1326,11 +1248,313 @@ export async function createBarIncident(data: { type: string; description: strin
         responsible: data.responsible || 'General',
       },
     });
-
     revalidatePath('/operations');
     return { success: true };
   } catch (error: any) {
-    console.error('Error al registrar incidencia:', error);
-    return { success: false, error: error.message || 'Error al registrar.' };
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getConsumptionReport() {
+  try {
+    const recentSales = await prisma.sale.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+      include: {
+        product: { 
+          include: { 
+            recipeItems: { include: { product: true } } 
+          } 
+        },
+        recipe: { 
+          include: { 
+            items: { include: { product: true } } 
+          } 
+        }
+      }
+    });
+
+    const consumptionMap: Record<string, { 
+      name: string; 
+      category: string; 
+      unit: string; 
+      totalConsumed: number; 
+      costImpact: number; 
+      usedIn: Set<string>;
+      details: { date: Date, name: string, qty: number, unit: string, cost: number }[];
+      secondaryItemsMap: Record<string, { name: string, qty: number, unit: string }>;
+    }> = {};
+
+    const globalSecondaryMap: Record<string, { name: string; unit: string; totalQty: number; usedInSubrecipes: Set<string> }> = {};
+
+    const allRecipes = await prisma.recipe.findMany({
+      include: { items: { include: { product: true } } }
+    });
+
+    recentSales.forEach((sale: any) => {
+      const qtySold = Number(sale.quantity) || 1;
+      const productVendido = sale.product;
+      const recipeVendida = sale.recipe;
+
+      let itemsToDeduct: any[] = [];
+      let saleName = 'Venta Desconocida';
+
+      if (productVendido && productVendido.recipeItems && productVendido.recipeItems.length > 0) {
+        itemsToDeduct = productVendido.recipeItems;
+        saleName = productVendido.name;
+      } else if (recipeVendida && recipeVendida.items && recipeVendida.items.length > 0) {
+        itemsToDeduct = recipeVendida.items;
+        saleName = recipeVendida.name || 'Receta';
+      }
+
+      if (itemsToDeduct.length > 0) {
+        itemsToDeduct.forEach((item: any) => {
+          const ingredient = item.product;
+          if (!ingredient) return;
+
+          const recipeQty = Number(item.quantity) || 0;
+          const totalIngredientUsed = recipeQty * qtySold; 
+          
+          const pCap = Number(ingredient.capacity || 1);
+          const pUnit = (ingredient.unit || 'g').toLowerCase();
+          
+          let deductionInCapUnits = totalIngredientUsed;
+          if (['lt', 'l', 'litro', 'litros', 'kg', 'kilo', 'kilos'].includes(pUnit)) {
+            deductionInCapUnits = totalIngredientUsed / 1000;
+          } else if (['pz', 'pza', 'pieza', 'piezas', 'lata'].includes(pUnit)) {
+            if (totalIngredientUsed > 10 && pCap > 10) deductionInCapUnits = totalIngredientUsed;
+            else deductionInCapUnits = totalIngredientUsed * pCap;
+          } else {
+            if (pCap === 1 && totalIngredientUsed > 5) deductionInCapUnits = totalIngredientUsed / 1000;
+          }
+
+          const fraction = pCap > 0 ? deductionInCapUnits / pCap : 0;
+          const estimatedCost = fraction * (Number(ingredient.costPrice) || 0);
+
+          if (!consumptionMap[ingredient.id]) {
+            consumptionMap[ingredient.id] = {
+              name: ingredient.name,
+              category: ingredient.category || 'N/A',
+              unit: ingredient.unit || 'g/ml',
+              totalConsumed: 0,
+              costImpact: 0,
+              usedIn: new Set(),
+              details: [],
+              secondaryItemsMap: {}
+            };
+          }
+
+          consumptionMap[ingredient.id].totalConsumed += totalIngredientUsed;
+          consumptionMap[ingredient.id].costImpact += estimatedCost;
+          consumptionMap[ingredient.id].usedIn.add(saleName);
+          
+          consumptionMap[ingredient.id].details.push({
+            date: sale.createdAt,
+            name: `${qtySold}x ${saleName}`,
+            qty: totalIngredientUsed,
+            unit: ingredient.unit || 'g/ml',
+            cost: estimatedCost
+          });
+
+          // VINCULAR MATERIA PRIMA SECUNDARIA CON CONVERSIÓN DE ESCALA AUTOMÁTICA
+          const matchingRecipe = allRecipes.find(r => 
+            r.name.toLowerCase().trim() === ingredient.name.replace(/\[Subreceta\]/gi, '').toLowerCase().trim()
+          );
+
+          if (matchingRecipe && matchingRecipe.items) {
+            matchingRecipe.items.forEach((subItem: any) => {
+              const subIngredient = subItem.product;
+              if (!subIngredient) return;
+
+              const subQtyInRecipe = Number(subItem.quantity) || 0;
+              
+              let totalSubUsed = (subQtyInRecipe * totalIngredientUsed);
+              let subUnit = subIngredient.unit || 'g/ml';
+              const unitLower = subUnit.toLowerCase();
+
+              if ((unitLower.includes('g') || unitLower.includes('ml')) && totalSubUsed > 1000) {
+                totalSubUsed = totalSubUsed / 1000;
+                if (unitLower.includes('g')) subUnit = 'kg';
+                if (unitLower.includes('ml')) subUnit = 'lt';
+              }
+
+              if (!consumptionMap[ingredient.id].secondaryItemsMap[subIngredient.id]) {
+                consumptionMap[ingredient.id].secondaryItemsMap[subIngredient.id] = {
+                  name: subIngredient.name,
+                  qty: 0,
+                  unit: subUnit
+                };
+              }
+              consumptionMap[ingredient.id].secondaryItemsMap[subIngredient.id].qty += totalSubUsed;
+
+              if (!globalSecondaryMap[subIngredient.id]) {
+                globalSecondaryMap[subIngredient.id] = {
+                  name: subIngredient.name,
+                  unit: subUnit,
+                  totalQty: 0,
+                  usedInSubrecipes: new Set()
+                };
+              }
+              globalSecondaryMap[subIngredient.id].totalQty += totalSubUsed;
+              globalSecondaryMap[subIngredient.id].usedInSubrecipes.add(ingredient.name);
+            });
+          }
+        });
+      } else if (productVendido) {
+        const pCost = Number(productVendido.costPrice) || 0;
+        const pCap = Number(productVendido.capacity || 1);
+        const catLower = (productVendido.category || '').toLowerCase();
+        
+        let equivalentUnitsConsumed = 0; 
+        let costVal = 0;
+        let displayUnit = 'Botella(s)/Pza(s)'; 
+        let detailUnit = '';
+        let detailQty = 0;
+
+        if (sale.saleMode === 'COPEO') {
+          const isWineOrEspumoso = ['vinos', 'vino', 'tinto', 'blanco', 'rosado', 'espumoso', 'champagne', 'cava'].some(c => catLower.includes(c));
+          const mlPerPortion = isWineOrEspumoso ? 150 : 45;
+          const totalMl = qtySold * mlPerPortion;
+          equivalentUnitsConsumed = pCap > 0 ? (totalMl / pCap) : 0; 
+          costVal = equivalentUnitsConsumed * pCost;
+          detailQty = qtySold;
+          detailUnit = 'Copa(s) / Trago(s)';
+        } else if (sale.saleMode === 'BOTELLA') {
+          equivalentUnitsConsumed = qtySold;
+          costVal = qtySold * pCost;
+          detailQty = qtySold;
+          detailUnit = 'Botella(s)';
+        } else if (sale.saleMode === 'PIEZA') {
+          equivalentUnitsConsumed = qtySold;
+          costVal = qtySold * pCost;
+          detailQty = qtySold;
+          detailUnit = 'Pza(s)';
+          displayUnit = 'Pza(s)';
+        } else {
+          equivalentUnitsConsumed = qtySold;
+          costVal = qtySold * pCost;
+          detailQty = qtySold;
+          detailUnit = 'Unidad(es)';
+        }
+
+        if (!consumptionMap[productVendido.id]) {
+          consumptionMap[productVendido.id] = {
+            name: productVendido.name,
+            category: productVendido.category || 'N/A',
+            unit: displayUnit,
+            totalConsumed: 0,
+            costImpact: 0,
+            usedIn: new Set(),
+            details: [],
+            secondaryItemsMap: {}
+          };
+        }
+        
+        const eventName = `Venta Directa (${sale.saleMode})`;
+        consumptionMap[productVendido.id].totalConsumed += equivalentUnitsConsumed;
+        consumptionMap[productVendido.id].costImpact += costVal;
+        consumptionMap[productVendido.id].usedIn.add(eventName);
+        
+        consumptionMap[productVendido.id].details.push({
+          date: sale.createdAt,
+          name: eventName,
+          qty: detailQty,
+          unit: detailUnit,
+          cost: costVal
+        });
+      }
+    });
+
+    return {
+      success: true,
+      data: Object.values(consumptionMap).map(item => ({
+        ...item,
+        usedIn: Array.from(item.usedIn).join(', '),
+        details: item.details.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+        secondaryItems: Object.values(item.secondaryItemsMap)
+      })).sort((a, b) => b.costImpact - a.costImpact),
+      
+      secondaryConsumption: Object.values(globalSecondaryMap).map(sec => ({
+        ...sec,
+        usedInSubrecipes: Array.from(sec.usedInSubrecipes).join(', ')
+      })).sort((a, b) => b.totalQty - a.totalQty)
+    };
+  } catch (error: any) {
+    console.error("Error al generar reporte de consumo:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+//vamos a eliminar esta funcion una vez corregido el porblema del inventario//
+export async function adminBulkForceFixStock(updates: { id: string, closed: number, weight: number }[]) {
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (const item of updates) {
+        await tx.product.update({
+          where: { id: item.id },
+          data: {
+            stockClosed: Number(item.closed) || 0,
+            currentWeight: Number(item.weight) || 0,
+          },
+        });
+
+        // Limpiamos botellas abiertas residuales para ese producto
+        await tx.openBottle.deleteMany({
+          where: { productId: item.id }
+        });
+      }
+    });
+
+    revalidatePath('/inventory');
+    revalidatePath('/supplies');
+    revalidatePath('/sales');
+    revalidatePath('/');
+
+    return { success: true, message: 'Stock corregido masivamente con éxito.' };
+  } catch (error: any) {
+    console.error('Error al forzar corrección masiva:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+//aqui es para almacen//
+export async function adminBulkFixWarehouseStock(updates: { id: string, warehouseStock: number }[]) {
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (const item of updates) {
+        const product = await tx.product.findUnique({ where: { id: item.id } });
+        if (!product) continue;
+
+        const previousStock = Number(product.warehouseStock || 0);
+        const newStock = Number(item.warehouseStock) || 0;
+        const difference = newStock - previousStock;
+
+        // Solo actualizamos y registramos si realmente hubo un cambio
+        if (difference !== 0) {
+          await tx.product.update({
+            where: { id: item.id },
+            data: { warehouseStock: newStock },
+          });
+
+          await tx.warehouseAuditLog.create({
+            data: {
+              productId: product.id,
+              productName: product.name,
+              previousStock: previousStock,
+              physicalStock: newStock,
+              difference: difference,
+              unitCost: product.costPrice || 0,
+              totalLoss: difference * (product.costPrice || 0),
+            },
+          });
+        }
+      }
+    });
+
+    revalidatePath('/warehouse');
+    return { success: true, message: 'Stock de almacén actualizado masivamente.' };
+  } catch (error: any) {
+    console.error('Error al actualizar almacén masivamente:', error);
+    return { success: false, error: error.message };
   }
 }

@@ -97,6 +97,12 @@ export default async function HomePage() {
           <h2 className="text-base font-bold text-white group-hover:text-amber-400 transition">Configuración</h2>
           <p className="text-xs text-slate-400 mt-1">Ajustes del sistema, nombre del establecimiento y wallpaper.</p>
         </Link>
+        <Link
+  href="/reports"
+  className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-medium px-5 py-3 rounded-xl transition flex items-center gap-2"
+>
+  📊 Reporte de Consumo (Auditoría)
+</Link>
 
         <Link
   href="/operations"

@@ -2,8 +2,8 @@
 
 import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { exportInventoryToExcel } from '@/app/actions';
-import ProductionModal from './ProductionModal'; // IMPORTADO AQUI
+import { exportInventoryToExcel, adminBulkForceFixStock } from '@/app/actions';
+import ProductionModal from './ProductionModal';
 
 export default function InventoryClient({ products = [] }: { products: any[] }) {
   const [activeTab, setActiveTab] = useState('destilados');
@@ -11,6 +11,11 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
   const [selectedSubtypeFilter, setSelectedSubtypeFilter] = useState('ALL');
   const [showOnlyLowStock, setShowOnlyLowStock] = useState(false);
   const [copiedNotification, setCopiedNotification] = useState(false);
+
+  // Estados para el Modo Corrección Masiva
+  const [isBulkEditing, setIsBulkEditing] = useState(false);
+  const [isSavingBulk, setIsSavingBulk] = useState(false);
+  const [bulkEdits, setBulkEdits] = useState<Record<string, { closed: number; weight: number }>>({});
 
   const tabs = [
     {
@@ -77,7 +82,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
           openRatio = totalPortion; 
           displayMlOrValue = openRatio * capacity; 
         } else {
-          // MÉTODO BÁSCULA (GRAMOS)
           if (item.openBottles && item.openBottles.length > 0) {
             const totalNetMl = item.openBottles.reduce((acc: number, b: any) => {
               const bruto = Number(b.value) || 0;
@@ -120,8 +124,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
       const cost = Number(item.costPrice || 0);
       const totalValue = (stockVal * cost) + (openRatio * cost);
 
-      // Usamos el minStock personalizado del producto (por defecto 1.0 si no se especificó)
-      // Usamos el minStock personalizado del producto (por defecto 1.0 si no se especificó)
       const minThreshold = Number(item.minStock) || 1.0;
       
       let isLowStock = false;
@@ -133,13 +135,10 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
       ].some((term) => catLowerFull.includes(term) || nameLowerFull.includes(term));
 
       if (isLiquorOrWine) {
-        // Destilados y vinos por unidades equivalentes
         isLowStock = totalUnitsEquivalent < minThreshold;
       } else if (isStrictPiece) {
-        // Mezcladores, aguas, refrescos y cápsulas se evalúan estrictamente por sus unidades cerradas (stockVal)
         isLowStock = stockVal < minThreshold;
       } else {
-        // Abarrotes, frutas y jarabes por gramaje/mililitros reales
         isLowStock = displayMlOrValue < minThreshold;
       }
 
@@ -216,6 +215,45 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
 
   const groupKeys = Object.keys(groupedProducts).sort();
 
+  // Funciones para el Modo de Corrección Masiva
+  const handleBulkChange = (id: string, field: 'closed' | 'weight', value: number) => {
+    setBulkEdits((prev) => {
+      const currentVal = prev[id] || { 
+        closed: enrichedProducts.find(p => p.id === id)?.stockVal || 0, 
+        weight: enrichedProducts.find(p => p.id === id)?.currentWeight || 0 
+      };
+      return {
+        ...prev,
+        [id]: { ...currentVal, [field]: value }
+      };
+    });
+  };
+
+  const handleSaveBulkEdits = async () => {
+    const updates = Object.keys(bulkEdits).map(id => ({
+      id,
+      closed: bulkEdits[id].closed,
+      weight: bulkEdits[id].weight
+    }));
+
+    if (updates.length === 0) {
+      setIsBulkEditing(false);
+      return;
+    }
+
+    setIsSavingBulk(true);
+    const res = await adminBulkForceFixStock(updates);
+    setIsSavingBulk(false);
+
+    if (res.success) {
+      setBulkEdits({});
+      setIsBulkEditing(false);
+      window.location.reload();
+    } else {
+      alert('Error al guardar: ' + res.error);
+    }
+  };
+
   const handleCopyOrderList = () => {
     const lowStockItems = enrichedProducts.filter((p) => p.isLowStock);
     if (lowStockItems.length === 0) {
@@ -264,7 +302,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto font-sans">
       
-      {/* Cabecera Principal con el Botón de Bitácora Destacado a la Derecha */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-800">
         <div>
           <h1 className="text-2xl font-bold text-white">Monitoreo de Inventario</h1>
@@ -273,7 +310,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
           </p>
         </div>
 
-        {/* Botón de Bitácora de Turnos */}
         <Link
           href="/inventory/logs"
           className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs px-4 py-2.5 rounded-lg transition flex items-center gap-1.5 shadow-xl border border-amber-400 whitespace-nowrap self-start sm:self-auto"
@@ -282,7 +318,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
         </Link>
       </div>
 
-      {/* Barra de Acciones Operativas */}
       <div className="flex items-center gap-2 flex-wrap">
         <Link
           href="/physical-count"
@@ -315,6 +350,37 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
         >
           📋 {copiedNotification ? '¡Lista Copiada!' : 'Copiar Pedido de Compras'}
         </button>
+
+        {/* --- BOTÓN DE MODO CORRECCIÓN MASIVA --- */}
+        <div className="flex items-center gap-2 ml-auto">
+          {isBulkEditing ? (
+            <>
+              <button
+                onClick={handleSaveBulkEdits}
+                disabled={isSavingBulk}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition flex items-center gap-1.5 shadow-lg cursor-pointer"
+              >
+                {isSavingBulk ? '⏳ Guardando...' : '💾 Guardar Correcciones'}
+              </button>
+              <button
+                onClick={() => {
+                  setIsBulkEditing(false);
+                  setBulkEdits({});
+                }}
+                className="bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-bold px-3 py-2 rounded-lg transition cursor-pointer"
+              >
+                ✕ Cancelar
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setIsBulkEditing(true)}
+              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold px-4 py-2 rounded-lg transition flex items-center gap-1.5 shadow-lg cursor-pointer"
+            >
+              🛠️ Modo Corrección Masiva
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -381,7 +447,6 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
             </select>
           )}
 
-          {/* BOTÓN DE PRODUCCIÓN (BATEO) - SOLO APARECE EN PREPARACIONES Y JARABES */}
           {activeTab?.toLowerCase().includes('preparaciones') && (
             <ProductionModal />
           )}
@@ -401,9 +466,9 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
           <h2 className="text-sm font-semibold text-white">
             {currentTabInfo?.label} ({filteredProducts.length} insumos)
           </h2>
-          {showOnlyLowStock && (
-            <span className="text-xs text-rose-400 font-semibold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-              Vista filtrada: Solo bajo stock
+          {isBulkEditing && (
+            <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 animate-pulse">
+              ✏️ Modo Edición Activo
             </span>
           )}
         </div>
@@ -462,10 +527,34 @@ export default function InventoryClient({ products = [] }: { products: any[] }) 
                                 </span>
                               )}
                             </div>
-                            <div className="text-[11px] text-slate-500">
-                              {item.isLiquorOrWine && item.tareWeight && !isPortionMode ? `Tara: ${item.tareWeight}g | ` : ''}
-                              Costo: ${Number(item.costPrice || 0).toFixed(2)}
+                            <div className="text-[11px] text-slate-500 flex items-center gap-2 flex-wrap mt-0.5">
+                              <span>{item.isLiquorOrWine && item.tareWeight && !isPortionMode ? `Tara: ${item.tareWeight}g | ` : ''}Costo: ${Number(item.costPrice || 0).toFixed(2)}</span>
                             </div>
+
+                            {/* --- INPUTS DE CORRECCIÓN MASIVA --- */}
+                            {isBulkEditing && (
+                              <div className="mt-2 flex items-center gap-2 bg-slate-950/80 p-1.5 rounded border border-amber-500/30 w-fit">
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] text-slate-400 mb-0.5 uppercase">Cerradas</span>
+                                  <input
+                                    type="number"
+                                    value={bulkEdits[item.id]?.closed ?? item.stockVal}
+                                    onChange={(e) => handleBulkChange(item.id, 'closed', Number(e.target.value))}
+                                    className="w-16 bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded text-center font-mono focus:border-amber-500 outline-none"
+                                  />
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] text-slate-400 mb-0.5 uppercase">Abiertas ({item.unit})</span>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={bulkEdits[item.id]?.weight ?? (item.currentWeight || 0)}
+                                    onChange={(e) => handleBulkChange(item.id, 'weight', Number(e.target.value))}
+                                    className="w-20 bg-slate-900 border border-slate-700 text-white text-xs px-2 py-1 rounded text-center font-mono focus:border-amber-500 outline-none"
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </td>
 
                           <td className="py-3.5 px-4 font-mono text-emerald-400 font-semibold">

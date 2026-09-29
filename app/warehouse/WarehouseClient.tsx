@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { registerWarehouseAdjustment } from '@/app/actions'; // <-- Importamos la Server Action
+import { registerWarehouseAdjustment, adminBulkFixWarehouseStock } from '@/app/actions'; // <-- Importamos ambas Server Actions
 
 interface ProductItem {
   id: string;
@@ -57,9 +57,10 @@ export default function WarehouseClient({
   const [selectedSupplier, setSelectedSupplier] = useState('');
   const [activeSubgroup, setActiveSubgroup] = useState('TODOS');
   
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [tempStock, setTempStock] = useState<string>('');
-  const [loadingId, setLoadingId] = useState<string | null>(null);
+  // Estados para Corrección Masiva
+  const [isBulkEditing, setIsBulkEditing] = useState(false);
+  const [isSavingBulk, setIsSavingBulk] = useState(false);
+  const [bulkEdits, setBulkEdits] = useState<Record<string, number>>({});
 
   // Estados locales para edición rápida de Límites de Almacén
   const [limitsState, setLimitsState] = useState<{ [key: string]: { min: number; max: number } }>({});
@@ -119,34 +120,41 @@ export default function WarehouseClient({
   const totalWarehouseUnits = products.reduce((acc, p) => acc + (Number(p.warehouseStock) || 0), 0);
   const totalWarehouseValue = products.reduce((acc, p) => acc + ((Number(p.warehouseStock) || 0) * (Number(p.costPrice) || 0)), 0);
 
-  const handleSaveStock = async (productId: string) => {
-    const val = parseInt(tempStock, 10);
-    if (isNaN(val) || val < 0) {
-      alert('Ingresa una cantidad válida.');
+  // MANEJADORES CORRECCIÓN MASIVA
+  const handleBulkChange = (id: string, value: number) => {
+    setBulkEdits((prev) => ({
+      ...prev,
+      [id]: value
+    }));
+  };
+
+  const handleSaveBulkEdits = async () => {
+    const updates = Object.keys(bulkEdits).map(id => ({
+      id,
+      warehouseStock: bulkEdits[id]
+    }));
+
+    if (updates.length === 0) {
+      setIsBulkEditing(false);
       return;
     }
 
-    try {
-      setLoadingId(productId);
-      const res = await fetch('/api/warehouse/adjust', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId, newWarehouseStock: val }),
-      });
+    setIsSavingBulk(true);
+    const res = await adminBulkFixWarehouseStock(updates);
+    setIsSavingBulk(false);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al actualizar');
-
-      setEditingId(null);
+    if (res.success) {
+      setBulkEdits({});
+      setIsBulkEditing(false);
+      alert(res.message);
       router.refresh();
-    } catch (err: any) {
-      alert(err.message || 'Error al guardar el ajuste.');
-    } finally {
-      setLoadingId(null);
+    } else {
+      alert('Error al guardar: ' + res.error);
     }
   };
 
-  // MANEJADOR PARA GUARDAR LA MERMA/AJUSTE
+
+  // MANEJADOR PARA GUARDAR LA MERMA/AJUSTE INDIVIDUAL (MODAL)
   const handleSubmitAdjustment = async () => {
     if (!adjProductId || adjQty <= 0) {
       alert('Selecciona un producto y una cantidad válida mayor a 0.');
@@ -155,9 +163,7 @@ export default function WarehouseClient({
 
     try {
       setIsAdjusting(true);
-      // Si es merma, la cantidad es negativa para que descuente. Si es sobrante, es positiva.
       const finalQty = adjType === 'MERMA' ? -Math.abs(adjQty) : Math.abs(adjQty);
-      
       const res = await registerWarehouseAdjustment(adjProductId, finalQty);
       
       if (!res.success) throw new Error(res.error);
@@ -252,12 +258,47 @@ export default function WarehouseClient({
         </div>
       )}
 
-      {/* Filtros */}
+      {/* Filtros y Modo Corrección */}
       {activeSubgroup !== '📋 HISTORIAL DE MERMAS / AJUSTES' && (
         <section className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4">
-          <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
-            🔍 Búsqueda y Proveedor
-          </h2>
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+             <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">
+                🔍 Búsqueda y Proveedor
+             </h2>
+
+             {activeSubgroup !== '⚙️ CONFIGURAR MÁXIMOS Y MÍNIMOS' && (
+                 <div className="flex items-center gap-2">
+                 {isBulkEditing ? (
+                   <>
+                     <button
+                       onClick={handleSaveBulkEdits}
+                       disabled={isSavingBulk}
+                       className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition flex items-center gap-1.5 shadow-lg cursor-pointer"
+                     >
+                       {isSavingBulk ? '⏳ Guardando...' : '💾 Guardar Correcciones'}
+                     </button>
+                     <button
+                       onClick={() => {
+                         setIsBulkEditing(false);
+                         setBulkEdits({});
+                       }}
+                       className="bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-bold px-3 py-2 rounded-lg transition cursor-pointer"
+                     >
+                       ✕ Cancelar
+                     </button>
+                   </>
+                 ) : (
+                   <button
+                     onClick={() => setIsBulkEditing(true)}
+                     className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold px-4 py-2 rounded-lg transition flex items-center gap-1.5 shadow-lg cursor-pointer"
+                   >
+                     🛠️ Modo Corrección Masiva
+                   </button>
+                 )}
+               </div>
+             )}
+          </div>
+          
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input
               type="text"
@@ -467,7 +508,11 @@ export default function WarehouseClient({
             <h2 className="text-sm font-semibold text-white">
               📋 Inventario Físico de Almacén <span className="text-amber-400">({activeSubgroup})</span>
             </h2>
-            <span className="text-xs text-slate-400 font-mono">{filteredProducts.length} productos</span>
+            {isBulkEditing && (
+              <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 animate-pulse">
+                ✏️ Modo Edición Activo
+              </span>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -492,8 +537,6 @@ export default function WarehouseClient({
                     const whStock = Number(p.warehouseStock) || 0;
                     const cost = Number(p.costPrice) || 0;
                     const totalVal = whStock * cost;
-                    const isEditing = editingId === p.id;
-                    const isLoading = loadingId === p.id;
                     const unitLabel = getProductUnit(p);
 
                     return (
@@ -501,46 +544,20 @@ export default function WarehouseClient({
                         <td className="py-3 px-4 pl-6 font-medium text-white">{p.name}</td>
                         <td className="py-3 px-4 text-xs text-slate-400">{p.category || 'General'}</td>
                         <td className="py-3 px-4 text-xs text-amber-400/80">{p.supplier || 'N/D'}</td>
-                        <td className="py-3 px-4 text-center font-mono">
-                          {isEditing ? (
-                            <div className="flex items-center justify-center gap-2">
-                              <input
-                                type="number"
-                                value={tempStock}
-                                onChange={(e) => setTempStock(e.target.value)}
-                                className="w-20 bg-slate-950 border border-amber-500 rounded px-2 py-1 text-center text-white text-sm outline-none font-bold"
-                                autoFocus
-                              />
-                              <span className="text-xs text-slate-400">{unitLabel}</span>
-                              <button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={() => handleSaveStock(p.id)}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded text-xs font-bold"
-                              >
-                                {isLoading ? '...' : '✓'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingId(null)}
-                                className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded text-xs"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingId(p.id);
-                                setTempStock(whStock.toString());
-                              }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-950/60 hover:bg-amber-500/20 border border-slate-800 hover:border-amber-500/50 rounded-lg text-amber-400 font-bold transition cursor-pointer"
-                            >
-                              <span>{whStock} {unitLabel}</span>
-                              <span className="text-[10px] text-slate-500">✏️</span>
-                            </button>
-                          )}
+                        <td className="py-3 px-4 text-center font-mono text-amber-400 font-bold">
+                           {isBulkEditing ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <input
+                                  type="number"
+                                  value={bulkEdits[p.id] ?? whStock}
+                                  onChange={(e) => handleBulkChange(p.id, Number(e.target.value))}
+                                  className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-center text-white text-sm outline-none focus:border-amber-500 font-bold"
+                                />
+                                <span className="text-xs text-slate-400 font-normal">{unitLabel}</span>
+                              </div>
+                           ) : (
+                              <span>{whStock} <span className="text-xs text-slate-500 font-normal">{unitLabel}</span></span>
+                           )}
                         </td>
                         <td className="py-3 px-4 text-right font-mono text-xs text-slate-300">
                           ${cost.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
